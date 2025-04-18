@@ -38,12 +38,15 @@ if not results:
 df_result = pd.DataFrame(results)
 
 if "Total Score" not in df_result.columns:
-    st.error("❌ Missing 'Total Score' in result. Check indicator calculations.")
+    st.error("❌ Missing 'Total Score' column. Here is the raw output:")
     st.dataframe(df_result)
     st.stop()
 
-sorted_df = df_result.sort_values(by="Total Score", ascending=False).reset_index(drop=True)
-st.dataframe(sorted_df.style.format("{:.2f}"))
-
-log_to_google_sheets(sheet_name=selected_timeframe, df=sorted_df)
-st.success("✅ Logged to Google Sheet successfully!")
+try:
+    sorted_df = df_result.sort_values(by="Total Score", ascending=False).reset_index(drop=True)
+    st.dataframe(sorted_df.style.format("{:.2f}"))
+    log_to_google_sheets(sheet_name=selected_timeframe, df=sorted_df)
+    st.success("✅ Logged to Google Sheet successfully!")
+except KeyError as ke:
+    st.error(f"❌ Sorting failed due to missing column: {ke}")
+    st.dataframe(df_result)
