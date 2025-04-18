@@ -11,8 +11,15 @@ def get_kite():
     creds_dict = json.loads(st.secrets["gspread_service_account"])
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
-    sheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1cjy-TxRw3V_hxKd1p87CKNIv-O7QUatDQ1WkKe2m3T0/edit#gid=2011235067")
-    tokens = sheet.sheet1.row_values(1)
+
+    sheet = client.open("ZerodhaTokenStore")
+    worksheet = sheet.sheet1
+    tokens = worksheet.row_values(1)
+
+    if len(tokens) < 3:
+        st.error("❌ Missing API credentials in 'ZerodhaTokenStore' Sheet1 (row 1, columns A–C). Please add API Key, Secret, and Access Token.")
+        st.stop()
+
     api_key, api_secret, access_token = tokens[0], tokens[1], tokens[2]
 
     kite = KiteConnect(api_key=api_key)
