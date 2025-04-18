@@ -10,7 +10,7 @@ def log_to_google_sheets(sheet_name, df):
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
 
-    sheet = client.open("Stock Rankings")
+    sheet = client.open("ZerodhaTokenStore")
 
     try:
         worksheet = sheet.worksheet(sheet_name)
