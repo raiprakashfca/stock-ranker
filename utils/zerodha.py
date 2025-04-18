@@ -3,12 +3,15 @@ import datetime
 from kiteconnect import KiteConnect
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+import json
+import streamlit as st
 
 def get_kite():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_name("zerodhatokensaver-1b53153ffd25.json", scope)
+    creds_dict = json.loads(st.secrets["gspread_service_account"])
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
-    sheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1cjy-TxRw3V_hxKd1p87CKNIv-O7QUatDQ1WkKe2m3T0/edit?gid=2011235067#gid=2011235067")
+    sheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1cjy-TxRw3V_hxKd1p87CKNIv-O7QUatDQ1WkKe2m3T0/edit#gid=2011235067")
     tokens = sheet.sheet1.row_values(1)
     api_key, api_secret, access_token = tokens[0], tokens[1], tokens[2]
 
