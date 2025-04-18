@@ -57,18 +57,24 @@ def get_instrument_token(kite, tradingsymbol):
         for instrument in instruments:
             if instrument["tradingsymbol"] == tradingsymbol:
                 return instrument["instrument_token"]
+        st.warning(f"⚠️ Instrument token not found for {tradingsymbol}")
     except Exception as e:
         st.error(f"⚠️ Error fetching instruments: {e}")
-    raise ValueError(f"Instrument token not found for {tradingsymbol}")
+    return None
 
 def get_stock_data(kite, symbol, interval, days):
     try:
         token = get_instrument_token(kite, symbol)
+        if not token:
+            return pd.DataFrame()
         end_date = datetime.datetime.now()
         start_date = end_date - datetime.timedelta(days=days)
         data = kite.historical_data(token, start_date, end_date, interval)
         df = pd.DataFrame(data)
-        df.set_index("date", inplace=True)
+        if df.empty:
+            st.warning(f"⚠️ No data returned for {symbol} ({interval})")
+        else:
+            df.set_index("date", inplace=True)
         return df
     except Exception as e:
         st.error(f"❌ Failed to fetch data for {symbol}: {e}")
