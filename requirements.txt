@@ -1,7 +1,7 @@
 streamlit
 pandas
-numpy
-pandas_ta
+numpy==1.26.4
+pandas-ta
 ta
 kiteconnect
 gspread
