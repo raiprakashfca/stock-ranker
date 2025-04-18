@@ -1,0 +1,8 @@
+streamlit
+pandas
+numpy
+pandas_ta
+ta
+kiteconnect
+gspread
+oauth2client
