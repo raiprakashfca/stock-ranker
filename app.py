@@ -3,12 +3,49 @@ import pandas as pd
 from utils.zerodha import get_kite, get_stock_data
 from utils.indicators import calculate_scores
 from utils.sheet_logger import log_to_google_sheets
+from kiteconnect import KiteConnect
+import gspread
+import json
+from oauth2client.service_account import ServiceAccountCredentials
 
 st.set_page_config(page_title="📊 Multi-Timeframe Stock Ranking Dashboard", layout="wide")
 st.title("📊 Multi-Timeframe Stock Ranking Dashboard")
 
-kite = get_kite()
+# Zerodha login panel
+st.sidebar.header("🔐 Zerodha Login")
+api_key_input = st.sidebar.text_input("API Key")
+api_secret_input = st.sidebar.text_input("API Secret", type="password")
+request_token_input = st.sidebar.text_input("Paste Request Token")
 
+kite = None
+if api_key_input and api_secret_input:
+    kite = KiteConnect(api_key=api_key_input)
+    login_url = kite.login_url()
+    st.sidebar.markdown(f"[🔑 Click here to generate Request Token]({login_url})")
+
+    if request_token_input:
+        try:
+            data = kite.generate_session(request_token_input, api_secret=api_secret_input)
+            access_token = data["access_token"]
+            kite.set_access_token(access_token)
+
+            # Save to Google Sheet
+            scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+            creds_dict = json.loads(st.secrets["gspread_service_account"])
+            creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+            client = gspread.authorize(creds)
+            sheet = client.open("ZerodhaTokenStore")
+            sheet.sheet1.update("A1", [[api_key_input, api_secret_input, access_token]])
+            st.sidebar.success("✅ Token saved. Please refresh the app.")
+            st.stop()
+        except Exception as e:
+            st.sidebar.error(f"❌ Failed to generate token: {e}")
+            st.stop()
+else:
+    st.sidebar.info("Enter API Key & Secret to begin")
+    st.stop()
+
+# Proceed if kite is ready
 TIMEFRAMES = {
     "15min": {"interval": "15minute", "days": 5},
     "1h": {"interval": "60minute", "days": 15},
