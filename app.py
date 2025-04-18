@@ -1,39 +1,49 @@
-
 import streamlit as st
+import pandas as pd
 from utils.zerodha import get_kite, get_stock_data
 from utils.indicators import calculate_scores
 from utils.sheet_logger import log_to_google_sheets
-import pandas as pd
 
-st.set_page_config(page_title="📊 Stock Ranker", layout="wide")
+st.set_page_config(page_title="📊 Multi-Timeframe Stock Ranking Dashboard", layout="wide")
 st.title("📊 Multi-Timeframe Stock Ranking Dashboard")
-
-TIMEFRAMES = {
-    "15m": {"interval": "15minute", "days": 5},
-    "1h": {"interval": "60minute", "days": 15},
-    "1d": {"interval": "day", "days": 90}
-}
-
-stocks = [
-    "RELIANCE", "HDFCBANK", "ICICIBANK", "INFY", "TCS",
-    "LT", "SBIN", "KOTAKBANK", "AXISBANK", "ITC",
-    "HINDUNILVR", "BAJFINANCE", "ASIANPAINT", "HCLTECH"
-]
 
 kite = get_kite()
 
-tab1, tab2, tab3 = st.tabs(["15 Min", "1 Hour", "1 Day"])
-for tab, tf in zip([tab1, tab2, tab3], TIMEFRAMES.keys()):
-    with tab:
-        st.subheader(f"{tf} Ranking")
-        results = []
-        for symbol in stocks:
+TIMEFRAMES = {
+    "15min": {"interval": "15minute", "days": 5},
+    "1h": {"interval": "60minute", "days": 15},
+    "1d": {"interval": "day", "days": 90},
+}
+
+symbols = ["RELIANCE", "INFY", "TCS", "ICICIBANK", "HDFCBANK", "SBIN", "BHARTIARTL"]
+selected_timeframe = st.selectbox("Choose Timeframe", list(TIMEFRAMES.keys()))
+config = TIMEFRAMES[selected_timeframe]
+
+results = []
+with st.spinner(f"🔄 Fetching and analyzing data for {selected_timeframe}..."):
+    for symbol in symbols:
+        df = get_stock_data(kite, symbol, config["interval"], config["days"])
+        if not df.empty:
             try:
-                df = get_stock_data(kite, symbol, TIMEFRAMES[tf]['interval'], TIMEFRAMES[tf]['days'])
-                score = calculate_scores(df)
-                results.append({"Symbol": symbol, **score})
+                score_row = calculate_scores(df)
+                score_row["Symbol"] = symbol
+                results.append(score_row)
             except Exception as e:
-                st.warning(f"Error fetching {symbol}: {e}")
-        df_result = pd.DataFrame(results).sort_values(by="Total Score", ascending=False)
-        st.dataframe(df_result, use_container_width=True)
-        log_to_google_sheets(tf, df_result)
+                st.warning(f"⚠️ Scoring failed for {symbol}: {e}")
+
+if not results:
+    st.error("❌ No valid data to display. Check data fetch or indicator logic.")
+    st.stop()
+
+df_result = pd.DataFrame(results)
+
+if "Total Score" not in df_result.columns:
+    st.error("❌ Missing 'Total Score' in result. Check indicator calculations.")
+    st.dataframe(df_result)
+    st.stop()
+
+sorted_df = df_result.sort_values(by="Total Score", ascending=False).reset_index(drop=True)
+st.dataframe(sorted_df.style.format("{:.2f}"))
+
+log_to_google_sheets(sheet_name=selected_timeframe, df=sorted_df)
+st.success("✅ Logged to Google Sheet successfully!")
