@@ -1,219 +1,87 @@
 import streamlit as st
 import pandas as pd
-from utils.zerodha import get_kite, get_stock_data
-from utils.indicators import calculate_scores
-from utils.sheet_logger import log_to_google_sheets
-from kiteconnect import KiteConnect
-import gspread
-import json
-from oauth2client.service_account import ServiceAccountCredentials
-from io import BytesIO
+import datetime
+from utils.zerodha import authenticate_kite, fetch_ohlcv_data
+from utils.indicators import calculate_indicators
+from utils.sheet_logger import log_to_sheet
 
-st.set_page_config(page_title="📊 Multi-Timeframe Stock Ranking Dashboard", layout="wide")
+# Streamlit page configuration
+st.set_page_config(
+    page_title="📊 Stock Ranking Dashboard",
+    layout="wide"
+)
 
-st.markdown("""
-    <style>
-    th, td { border-right: 1px solid #ddd; }
-    .timeframe-group td:not(:first-child) {
-        border-left: 3px solid #9e9e9e;
-    }
+# Header
+st.title("📈 Multi-Timeframe Stock Ranking Dashboard")
 
-    .score-badge {
-        display: inline-block;
-        padding: 6px 12px;
-        border-radius: 12px;
-        font-weight: 600;
-        min-width: 100px;
-        text-align: center;
-    }
-    .high { background-color: #28a745; }
-    .medium { background-color: #ffc107; color: black; }
-    .low { background-color: #dc3545; }
-    .direction { font-weight: 600; padding: 2px 6px; border-radius: 8px; margin-left: 8px; }
-    .bullish { background-color: #c6f6d5; color: #22543d; }
-    .bearish { background-color: #fed7d7; color: #742a2a; }
-    .neutral { background-color: #fff3cd; color: #856404; }
-    </style>
-""", unsafe_allow_html=True)
+# Sidebar: timeframe selection
+st.sidebar.header("🕒 Timeframe Selection")
+timeframe = st.sidebar.selectbox("Select timeframe", ["15min", "1h", "1d"])
 
-st.title("📊 Multi-Timeframe Stock Ranking Dashboard")
+# Define time range based on timeframe
+today = datetime.datetime.now()
+if timeframe == "15min":
+    start = today - datetime.timedelta(days=5)
+elif timeframe == "1h":
+    start = today - datetime.timedelta(days=15)
+else:  # 1d
+    start = today - datetime.timedelta(days=90)
 
-# Helper for trend direction
-def trend_direction_emoji(label):
-    styles = {
-        "Bullish": ("🟢 Bullish", "bullish"),
-        "Bearish": ("🔴 Bearish", "bearish"),
-        "Neutral": ("🟡 Neutral", "neutral")
-    }
-    emoji, css_class = styles.get(label, ("❓", "neutral"))
-    return f"<span class='direction {css_class}'>{emoji}</span>"
+# Sidebar: stock selection
+st.sidebar.header("📌 Select Stocks")
+stock_list = [
+    "RELIANCE", "HDFCBANK", "ICICIBANK", "INFY", "TCS",
+    "KOTAKBANK", "LT", "SBIN", "AXISBANK", "HINDUNILVR",
+    "ITC", "BHARTIARTL", "BAJFINANCE"
+]
+selected_stocks = st.sidebar.multiselect("Choose heavyweight stocks:", stock_list, default=stock_list)
 
-# Helper for reversal probability
-def reversal_indicator(prob):
-    try:
-        prob = float(prob)
-        if prob >= 0.7:
-            return f"<span class='score-badge high'>🔄 {prob:.2f}</span>"
-        elif prob >= 0.4:
-            return f"<span class='score-badge medium'>➖ {prob:.2f}</span>"
-        else:
-            return f"<span class='score-badge low'>✅ {prob:.2f}</span>"
-    except:
-        return prob
-
-# Authenticate from GSheet
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds_dict = json.loads(st.secrets["gspread_service_account"])
-creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-client = gspread.authorize(creds)
-sheet = client.open("ZerodhaTokenStore").sheet1
-tokens = sheet.get_all_values()[0]
-
-kite = KiteConnect(api_key=tokens[0])
-kite.set_access_token(tokens[2])
-
-TIMEFRAMES = {
-    "15m": {"interval": "15minute", "days": 5},
-    "1h": {"interval": "60minute", "days": 15},
-    "1d": {"interval": "day", "days": 90},
-}
-
-symbols = ["RELIANCE", "INFY", "TCS", "ICICIBANK", "HDFCBANK", "SBIN", "BHARTIARTL"]
-all_data = []
-
-with st.spinner("🔍 Analyzing all timeframes..."):
-    for symbol in symbols:
-        row = {"Symbol": symbol}
-        for label, config in TIMEFRAMES.items():
-            df = get_stock_data(kite, symbol, config["interval"], config["days"])
-            if not df.empty:
-                try:
-                    result = calculate_scores(df)
-                    default_keys = ["Trend Score", "Momentum Score", "Volume Score", "Total Score", "Trend Direction", "Reversal Probability"]
-                    for key in default_keys:
-                        if key not in result:
-                            result[key] = "N/A" if "Direction" in key else 0.0
-                    st.sidebar.write(f"📊 {symbol} [{label}]", result)
-                    adjusted_result = {}
-                    for key, value in result.items():
-                        adjusted_key = "TMV Score" if key == "Total Score" else key
-                        adjusted_result[adjusted_key] = value
-                        colname = f"{adjusted_key} ({label})"
-                        row[colname] = adjusted_result[adjusted_key]
-                except Exception as e:
-                    st.warning(f"⚠️ {symbol} ({label}) failed: {e}")
-        all_data.append(row)
-
-if not all_data:
-    st.error("❌ No stock data available.")
+# Validate selection
+if not selected_stocks:
+    st.warning("⚠️ Please select at least one stock to proceed.")
     st.stop()
 
-final_df = pd.DataFrame(all_data)
-st.sidebar.write("✅ Final DF Columns", final_df.columns.tolist())
+# Authenticate Kite
+st.sidebar.header("🔑 Zerodha Credentials")
+kite = authenticate_kite()
+if not kite:
+    st.error("❌ Kite authentication failed. Check token or API credentials.")
+    st.stop()
 
-st.markdown("### 🔎 Filter and Sort")
-sort_column = st.selectbox("Sort by", [col for col in final_df.columns if "Score" in col or "Reversal Probability" in col])
-sort_asc = st.radio("Order", ["Descending", "Ascending"]) == "Ascending"
-limit = st.slider("Top N Symbols", 1, len(final_df), 10)
-
-def render_badge(score):
-    try:
-        score = float(score)
-        if score >= 0.75:
-            return f"<span class='score-badge high'>🟢 {score:.2f}</span>"
-        elif score >= 0.4:
-            return f"<span class='score-badge medium'>🟡 {score:.2f}</span>"
-        else:
-            return f"<span class='score-badge low'>🔴 {score:.2f}</span>"
-    except:
-        return score
-
-score_cols = [col for col in final_df.columns if any(x in col for x in ["TMV Score", "Trend Direction", "Reversal Probability", "Symbol"]) ]
-detailed_cols = [col for col in final_df.columns if any(x in col for x in ["Trend Score", "Momentum Score", "Volume Score"])]
-display_df = final_df[score_cols].copy()
-
-# Remove previous separator column logic — now handled via grouping only
-# No need to insert manual separator columns
-
-# Sort and index
-display_df = display_df.sort_values(by=sort_column, ascending=sort_asc).head(limit)
-
-new_cols = []
-for col in display_df.columns:
-    if col == "Symbol":
-        new_cols.append(("Meta", "Symbol"))
-    elif "(" in col and ")" in col:
+# Fetch and compute
+@st.cache_data(ttl=300)
+def fetch_and_rank_stocks(stocks, start, end, interval):
+    results = []
+    for stock in stocks:
         try:
-            base, tf = col.rsplit(" (", 1)
-            tf = tf.replace(")", "")
-            new_cols.append((tf, base))
-        except:
-            new_cols.append(("Other", col))
-    else:
-        new_cols.append(("Other", col))
-display_df.columns = pd.MultiIndex.from_tuples(new_cols)
-display_df = display_df.set_index(("Meta", "Symbol"))
+            df = fetch_ohlcv_data(kite, stock, start, end, interval)
+            if df.empty or len(df) < 20:
+                continue
+            indicators = calculate_indicators(df)
+            indicators["Stock"] = stock
+            results.append(indicators)
+        except Exception as e:
+            st.error(f"⚠️ Error processing {stock}: {str(e)}")
+    return pd.DataFrame(results)
 
-def generate_custom_table(df):
-    html = "<table style='width:100%; border-collapse:collapse;'>"
-    html += "<thead><tr><th>Symbol</th>"
-    for timeframe in TIMEFRAMES:
-        for metric in ["TMV Score", "Trend Direction", "Reversal Probability"]:
-            html += f"<th>{metric} ({timeframe})</th>"
-    html += "</tr></thead><tbody>"
-    for symbol in df.index:
-        html += f"<tr><td><b>{symbol}</b></td>"
-        for timeframe in TIMEFRAMES:
-            for metric in ["TMV Score", "Trend Direction", "Reversal Probability"]:
-                try:
-                    val = df.loc[symbol, (timeframe, metric)]
-                except:
-                    val = ""
+# Process and show results
+with st.spinner("🔍 Analyzing data..."):
+    end = datetime.datetime.now()
+    rankings = fetch_and_rank_stocks(selected_stocks, start, end, timeframe)
 
-                if "Score" in metric:
-                    html += f"<td>{render_badge(val)}</td>"
-                elif "Reversal" in metric:
-                    html += f"<td>{reversal_indicator(val)}</td>"
-                elif "Direction" in metric:
-                    html += f"<td>{trend_direction_emoji(val)}</td>"
-                else:
-                    html += f"<td>{val}</td>"
-        html += "</tr>"
-    html += "</tbody></table>"
-    return html
+if rankings.empty:
+    st.warning("🚫 No data available for the selected timeframe or stocks.")
+    st.stop()
 
-st.markdown(generate_custom_table(display_df), unsafe_allow_html=True)
+# Sort and display
+rankings = rankings.sort_values("Score", ascending=False)
+st.success("✅ Analysis complete.")
+st.dataframe(rankings.style.background_gradient(cmap="Greens"))
 
-
-
-st.markdown("""
-#### 🟢🟡🔴 Score Legend
-- 🟢 High Score (≥ 0.75) — Strong trend/momentum/volume
-- 🟡 Moderate Score (0.4–0.74) — Watch closely
-- 🔴 Low Score (< 0.4) — Weak signal
-
-#### 🔄 Trend Direction
-- 🟢 Bullish — Uptrend
-- 🔴 Bearish — Downtrend
-- 🟡 Neutral — Sideways/No direction
-
-#### 🔁 Reversal Probability
-- 🔄 > 0.70 = Likely reversal
-- ➖ 0.40–0.70 = Uncertain
-- ✅ < 0.40 = Trend continuation
-""")
-
-# Export Excel
-excel_buffer = BytesIO()
-final_df.to_excel(excel_buffer, index=False)
-from datetime import datetime
-now = datetime.now().strftime("%Y-%m-%d_%H%M")
-st.caption(f"🕒 Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-st.download_button("📥 Download Excel", data=excel_buffer.getvalue(), file_name="stock_rankings.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-try:
-    log_to_google_sheets(sheet_name="Combined", df=final_df)
-    st.success("✅ Data saved to Google Sheet.")
-except Exception as e:
-    st.error("Google Sheet sync failed. Please re-authenticate or check sheet name.")
-    st.exception(e)
+# Log to Google Sheets
+if st.button("📝 Log Results to Google Sheets"):
+    try:
+        log_to_sheet(rankings, timeframe)
+        st.success("✅ Logged to Google Sheets successfully.")
+    except Exception as e:
+        st.error(f"❌ Failed to log: {e}")
