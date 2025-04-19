@@ -166,7 +166,10 @@ def generate_custom_table(df):
         html += f"<tr><td><b>{symbol}</b></td>"
         for timeframe in TIMEFRAMES:
             for metric in ["TMV Score", "Trend Direction", "Reversal Probability"]:
-                val = df.get((timeframe, metric), {}).get(symbol, "")
+                try:
+                val = df.loc[symbol, (timeframe, metric)]
+            except:
+                val = ""
                 if "Score" in metric:
                     html += f"<td>{render_badge(val)}</td>"
                 elif "Reversal" in metric:
@@ -181,17 +184,7 @@ def generate_custom_table(df):
 
 st.markdown(generate_custom_table(display_df), unsafe_allow_html=True)
 
-st.markdown("<div class='section-card'>", unsafe_allow_html=True)
-st.markdown("### 📈 Detailed Scores (Trend / Momentum / Volume + Direction + Reversal)")
-st.markdown('<div style="overflow-x: auto;"><style>th:first-child, td:first-child {
-  position: sticky;
-  left: 0;
-  background-color: #2a2a2a;
-  z-index: 2;
-  color: #fff;
-  font-weight: bold;
-}</style>' + styled.to_html(escape=False) + '</div>', unsafe_allow_html=True)
-st.markdown("</div>", unsafe_allow_html=True)
+
 
 st.markdown("""
 #### 🟢🟡🔴 Score Legend
