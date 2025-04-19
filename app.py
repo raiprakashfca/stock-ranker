@@ -14,6 +14,9 @@ st.set_page_config(page_title="📊 Multi-Timeframe Stock Ranking Dashboard", la
 st.markdown("""
     <style>
     th, td { border-right: 1px solid #ddd; }
+    .timeframe-group td:not(:first-child) {
+        border-left: 3px solid #9e9e9e;
+    }
 
     .score-badge {
         display: inline-block;
@@ -118,11 +121,17 @@ display_df = final_df[score_cols].copy()
 
 # Insert separator columns between timeframes
 for tf in ["15m", "1h"]:
-    insert_col = f"Separator ({tf})"
+    insert_col = f"― Separator ({tf}) ―"
     col_index = [i for i, c in enumerate(display_df.columns) if f"({tf})" in c][-1] + 1
-    display_df.insert(col_index, insert_col, '<div style="background-color:#e0e0e0; height:100%; width:100%;">&nbsp;</div>')
+    display_df.insert(col_index, insert_col, '<div style="background-color:#cfd8dc; height:100%; width:100%;">&nbsp;</div>')
 
 display_df = display_df.sort_values(by=sort_column, ascending=sort_asc).head(limit).set_index("Symbol")
+
+display_df.columns = pd.MultiIndex.from_tuples([
+    ("Symbol", col) if col == "Symbol" else
+    (col.split("(")[-1].replace(")", "").strip(), col.split(" (")[0].strip())
+    for col in display_df.reset_index().columns.tolist()
+])
 
 styled = display_df.style.format({
     col: (render_badge if "Score" in col else trend_direction_emoji if "Trend Direction" in col else reversal_indicator)
