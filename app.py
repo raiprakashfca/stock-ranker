@@ -126,16 +126,18 @@ display_df = final_df[score_cols].copy()
 display_df = display_df.sort_values(by=sort_column, ascending=sort_asc).head(limit).set_index("Symbol")
 
 display_df.columns = pd.MultiIndex.from_tuples([
-    ("15m", col) if "(15m)" in col else
-    ("1h", col) if "(1h)" in col else
-    ("1d", col) if "(1d)" in col else
-    ("Other", col)
-    for col in display_df.columns
+    ("Symbol", col) if col == "Symbol" else
+    (col.split("(")[-1].replace(")", "").strip(), col.split(" (")[0].strip())
+    for col in display_df.reset_index().columns.tolist()
 ])
 
 styled = display_df.style.format({
-    col: (render_badge if "Score" in col else trend_direction_emoji if "Trend Direction" in col else reversal_indicator)
-    for col in display_df.columns
+    col: (
+        render_badge if "Score" in col else
+        trend_direction_emoji if "Trend Direction" in col else
+        reversal_indicator if "Reversal Probability" in col else
+        None
+    ) for col in display_df.columns
 }, escape="html")
 
 st.markdown("<div class='section-card'>", unsafe_allow_html=True)
