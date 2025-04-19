@@ -133,12 +133,8 @@ for col in display_df.columns:
     else:
         matched = False
         for tf in TIMEFRAMES:
-            if f"({tf})" in col:
-                if f" ({tf})" in col:
+            if f" ({tf})" in col:
                 base = col.replace(f" ({tf})", "")
-                new_cols.append((tf, base))
-                matched = True
-                break
                 new_cols.append((tf, base))
                 matched = True
                 break
