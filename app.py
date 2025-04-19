@@ -123,13 +123,14 @@ display_df = final_df[score_cols].copy()
 # No need to insert manual separator columns
 
 # Sort and index
-display_df = display_df.sort_values(by=sort_column, ascending=sort_asc).head(limit).set_index("Symbol")
+display_df = display_df.sort_values(by=sort_column, ascending=sort_asc).head(limit)
 
 display_df.columns = pd.MultiIndex.from_tuples([
-    ("Symbol", col) if col == "Symbol" else
+    ("Meta", "Symbol") if col == "Symbol" else
     (col.split("(")[-1].replace(")", "").strip(), col.split(" (")[0].strip())
-    for col in display_df.reset_index().columns.tolist()
+    for col in display_df.columns
 ])
+display_df = display_df.set_index(("Meta", "Symbol"))
 
 styled = display_df.style.format({
     col: (
