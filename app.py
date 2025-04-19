@@ -125,12 +125,21 @@ display_df = final_df[score_cols].copy()
 # Sort and index
 display_df = display_df.sort_values(by=sort_column, ascending=sort_asc).head(limit)
 
-display_df.columns = pd.MultiIndex.from_tuples([
-    ("Meta", "Symbol") if col == "Symbol" else
-    (tf, col.replace(f" ({tf})", ""))
-    for col in display_df.columns
-    for tf in TIMEFRAMES if f"({tf})" in col
-])
+new_cols = []
+for col in display_df.columns:
+    if col == "Symbol":
+        new_cols.append(("Meta", "Symbol"))
+    else:
+        matched = False
+        for tf in TIMEFRAMES:
+            if f"({tf})" in col:
+                new_cols.append((tf, col.replace(f" ({tf})", "")))
+                matched = True
+                break
+        if not matched:
+            new_cols.append(("Other", col))
+
+display_df.columns = pd.MultiIndex.from_tuples(new_cols)
 display_df = display_df.set_index(("Meta", "Symbol"))
 
 styled = display_df.style.format({
