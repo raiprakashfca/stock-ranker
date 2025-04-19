@@ -85,24 +85,40 @@ limit = st.slider("Top N Symbols", 1, len(final_df), 10)
 # Score badge function
 def render_badge(score):
     if score >= 0.75:
-        return f"<span class='score-badge high'>{score:.2f}</span>"
+        return f"<span class='score-badge high'>{score:.2f} 📈</span>"
     elif score >= 0.4:
-        return f"<span class='score-badge medium'>{score:.2f}</span>"
+        return f"<span class='score-badge medium'>{score:.2f} ⚠️</span>"
     else:
-        return f"<span class='score-badge low'>{score:.2f}</span>"
+        return f"<span class='score-badge low'>{score:.2f} ❌</span>"
 
 # Display Sorted and Filtered
-display_df = final_df[[col for col in final_df.columns if "Total Score" in col or "Symbol" in col]].copy()
+score_cols = [col for col in final_df.columns if "Total Score" in col or "Symbol" in col]
+display_df = final_df[score_cols].copy()
 display_df = display_df.sort_values(by=sort_column, ascending=sort_asc).head(limit).set_index("Symbol")
 
 styled = display_df.style.format("{:.2f}")
 for col in display_df.columns:
-    styled = styled.format({col: lambda x: render_badge(x)}, escape="html")
+    styled = styled.format({col: lambda x: render_badge(x) if isinstance(x, (int, float)) else x}, escape="html")
 
 st.markdown("<div class='section-card'>", unsafe_allow_html=True)
 st.markdown("### 📈 Top-Level Scores")
 st.write(styled.to_html(escape=False), unsafe_allow_html=True)
 st.markdown("</div>", unsafe_allow_html=True)
+
+# Explanation of what the scores mean
+with st.expander("ℹ️ How to interpret these scores"):
+    st.markdown("""
+    #### 🧠 Score Interpretation Guide
+
+    - **Trend Score**: Measures how strong the upward or downward direction of the stock is. Higher score = stronger and more consistent trend.
+    - **Momentum Score**: Indicates speed of price movement. High score = strong directional movement.
+    - **Volume Score**: Reflects if there is meaningful participation (confirmation) in the move. High score = strong investor interest.
+
+    #### ✅ Trading Conclusions
+    - A **high score across all timeframes** means a stock has a strong, sustained trend with confirmation.
+    - A **high score in 15m but low in 1d** could suggest a short-term reversal or fakeout.
+    - **Low volume score** means you should be cautious — even if trend/momentum are strong.
+    """)
 
 # Expandable Raw Indicator Panel
 with st.expander("🧪 View Raw Indicator Values per Timeframe"):
