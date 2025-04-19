@@ -128,9 +128,11 @@ for tf in ["15m", "1h"]:
 display_df = display_df.sort_values(by=sort_column, ascending=sort_asc).head(limit).set_index("Symbol")
 
 display_df.columns = pd.MultiIndex.from_tuples([
-    ("Symbol", col) if col == "Symbol" else
-    (col.split("(")[-1].replace(")", "").strip(), col.split(" (")[0].strip())
-    for col in display_df.reset_index().columns.tolist()
+    ("15m", col) if "(15m)" in col else
+    ("1h", col) if "(1h)" in col else
+    ("1d", col) if "(1d)" in col else
+    ("Other", col)
+    for col in display_df.columns
 ])
 
 styled = display_df.style.format({
