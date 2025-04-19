@@ -1,0 +1,44 @@
+# Ignore Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Ignore virtual environments
+.venv/
+env/
+venv/
+
+# Ignore Jupyter Notebooks checkpoints (if used)
+.ipynb_checkpoints/
+
+# Ignore OS and IDE-specific files
+.DS_Store
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# Streamlit secrets and config (token files, etc.)
+zerodhatokensaver-*.json
+.secrets.toml
+.streamlit/secrets.toml
+
+# Ignore compiled notebooks (if any)
+*.nbconvert.ipynb
+
+# Ignore log files
+*.log
+logs/
+
+# Ignore Excel or output files
+*.xlsx
+*.csv
+output/
+
+# Ignore Streamlit Cloud generated files
+.streamlit/config.toml
+
+# Ignore deployment artifacts
+*.pkl
+*.h5
+models/
