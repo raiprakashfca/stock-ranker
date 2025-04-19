@@ -99,7 +99,7 @@ with st.spinner("🔍 Analyzing all timeframes..."):
                         adjusted_key = "TMV Score" if key == "Total Score" else key
                         adjusted_result[adjusted_key] = value
                         colname = f"{adjusted_key} ({label})"
-                        row[colname] = value
+                        row[colname] = adjusted_result[adjusted_key]
                 except Exception as e:
                     st.warning(f"⚠️ {symbol} ({label}) failed: {e}")
         all_data.append(row)
