@@ -35,7 +35,7 @@ st.markdown("""
 
 st.title("📊 Multi-Timeframe Stock Ranking Dashboard")
 
-# Load credentials and token from Google Sheet
+# Authenticate from GSheet
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds_dict = json.loads(st.secrets["gspread_service_account"])
 creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
@@ -43,10 +43,11 @@ client = gspread.authorize(creds)
 sheet = client.open("ZerodhaTokenStore").sheet1
 tokens = sheet.get_all_values()[0]
 
+# Kite
 kite = KiteConnect(api_key=tokens[0])
 kite.set_access_token(tokens[2])
 
-# Timeframe Configs
+# Timeframes to analyze
 TIMEFRAMES = {
     "15m": {"interval": "15minute", "days": 5},
     "1h": {"interval": "60minute", "days": 15},
@@ -64,8 +65,8 @@ with st.spinner("🔍 Analyzing all timeframes..."):
             if not df.empty:
                 try:
                     result = calculate_scores(df)
-                    for k, v in result.items():
-                        row[f"{k} ({label})"] = v
+                    for key, value in result.items():
+                        row[f"{key} ({label})"] = value
                 except Exception as e:
                     st.warning(f"⚠️ {symbol} ({label}) failed: {e}")
         all_data.append(row)
@@ -76,13 +77,13 @@ if not all_data:
 
 final_df = pd.DataFrame(all_data)
 
-# Sort and Filter Section
+# Sort + Filter UI
 st.markdown("### 🔎 Filter and Sort")
 sort_column = st.selectbox("Sort by", [col for col in final_df.columns if "Score" in col])
 sort_asc = st.radio("Order", ["Descending", "Ascending"]) == "Ascending"
 limit = st.slider("Top N Symbols", 1, len(final_df), 10)
 
-# Score badge function
+# Badge formatting
 def render_badge(score):
     try:
         score = float(score)
@@ -95,11 +96,8 @@ def render_badge(score):
     except:
         return score
 
-# Display Sorted and Filtered
 score_cols = [col for col in final_df.columns if "Score" in col or "Symbol" in col]
-display_df = final_df[score_cols].copy()
-display_df = display_df.sort_values(by=sort_column, ascending=sort_asc).head(limit).set_index("Symbol")
-
+display_df = final_df[score_cols].copy().sort_values(by=sort_column, ascending=sort_asc).head(limit).set_index("Symbol")
 styled = display_df.style.format({col: render_badge for col in display_df.columns}, escape="html")
 
 st.markdown("<div class='section-card'>", unsafe_allow_html=True)
@@ -107,47 +105,46 @@ st.markdown("### 📈 Detailed Scores (Trend / Momentum / Volume)")
 st.write(styled.to_html(escape=False), unsafe_allow_html=True)
 st.markdown("</div>", unsafe_allow_html=True)
 
-# Score legend
+# Legend
 st.markdown("""
-#### 🔵 Score Legend
-- 🟢 **High Score (≥ 0.75)** — Strong trend, momentum, or volume
-- 🟡 **Moderate Score (0.4 – 0.74)** — Watch closely
-- 🔴 **Low Score (< 0.4)** — Weak or no signal
+#### 🟢🟡🔴 Score Legend
+- 🟢 High Score (≥ 0.75) — Strong trend/momentum/volume
+- 🟡 Moderate Score (0.4–0.74) — Watch closely
+- 🔴 Low Score (< 0.4) — Weak signal
 """)
 
-# Explanation of what the scores mean
+# Explanation
 with st.expander("ℹ️ How to interpret these scores"):
     st.markdown("""
-    #### 🧠 Score Interpretation Guide
+    #### 🧠 Score Guide
+    - **Trend Score**: Indicates direction consistency
+    - **Momentum Score**: Speed of movement
+    - **Volume Score**: Strength of participation
 
-    - **Trend Score**: Measures how strong the upward or downward direction of the stock is. Higher score = stronger and more consistent trend.
-    - **Momentum Score**: Indicates speed of price movement. High score = strong directional movement.
-    - **Volume Score**: Reflects if there is meaningful participation (confirmation) in the move. High score = strong investor interest.
-
-    #### ✅ Trading Conclusions
-    - A **high score across all timeframes** means a stock has a strong, sustained trend with confirmation.
-    - A **high score in 15m but low in 1d** could suggest a short-term reversal or fakeout.
-    - **Low volume score** means you should be cautious — even if trend/momentum are strong.
+    📌 A high score in all = strong setup.  
+    ⚠️ Mixed timeframe scores = wait and observe.
     """)
 
-# Expandable Raw Indicator Panel
-with st.expander("🧪 View Raw Indicator Values per Timeframe"):
+# Raw values
+with st.expander("🧪 Raw Indicator Values"):
     for symbol in symbols:
         st.markdown(f"#### {symbol}")
         for label in TIMEFRAMES:
-            indicator_cols = [
-                f"EMA8 ({label})", f"EMA21 ({label})", f"MACD ({label})", f"RSI ({label})", f"ADX ({label})",
-                f"OBV ({label})", f"MFI ({label})", f"SUPERT ({label})", f"HULL ({label})", f"ALLIGATOR ({label})", f"FAMA ({label})"
+            keys = [
+                f"EMA8 ({label})", f"EMA21 ({label})", f"MACD ({label})", f"RSI ({label})",
+                f"ADX ({label})", f"OBV ({label})", f"MFI ({label})", f"SUPERT ({label})",
+                f"HULL ({label})", f"ALLIGATOR ({label})", f"FAMA ({label})"
             ]
-            subset = final_df[final_df.Symbol == symbol][indicator_cols].transpose().reset_index()
+            subset = final_df[final_df.Symbol == symbol][keys].transpose().reset_index()
             subset.columns = ["Indicator", f"Value ({label})"]
             st.dataframe(subset, use_container_width=True)
 
-# Export Excel button
+# Export
 excel_buffer = BytesIO()
 final_df.to_excel(excel_buffer, index=False)
 st.download_button("📥 Download Excel", data=excel_buffer.getvalue(), file_name="stock_rankings.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
+# Log
 try:
     log_to_google_sheets(sheet_name="Combined", df=final_df)
     st.success("✅ Data saved to Google Sheet.")
