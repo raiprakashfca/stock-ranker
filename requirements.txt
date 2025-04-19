@@ -6,3 +6,4 @@ ta
 kiteconnect
 gspread
 oauth2client
+openpyxl
