@@ -123,7 +123,7 @@ display_df = final_df[score_cols].copy()
 # No need to insert manual separator columns
 
 # Sort and index
-(by=sort_column, ascending=sort_asc).head(limit).set_index("Symbol")
+display_df = display_df.sort_values(by=sort_column, ascending=sort_asc).head(limit).set_index("Symbol")
 
 display_df.columns = pd.MultiIndex.from_tuples([
     ("15m", col) if "(15m)" in col else
