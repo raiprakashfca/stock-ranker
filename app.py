@@ -147,13 +147,13 @@ styled = display_df.style.format({
         render_badge if "Score" in col else
         trend_direction_emoji if "Trend Direction" in col else
         reversal_indicator if "Reversal Probability" in col else
-        None
+        "{:.2f}"
     ) for col in display_df.columns
 }, escape="html")
 
 st.markdown("<div class='section-card'>", unsafe_allow_html=True)
 st.markdown("### 📈 Detailed Scores (Trend / Momentum / Volume + Direction + Reversal)")
-st.markdown('<div style="overflow-x: auto;"><style>th:first-child, td:first-child { position: sticky; left: 0; background-color: #f9f9f9; z-index: 1; }</style>' + styled.to_html(escape=False) + '</div>', unsafe_allow_html=True)
+st.markdown('<div style="overflow-x: auto;"><style>th:first-child, td:first-child { position: sticky; left: 0; background-color: #1e1e1e; z-index: 1; color: white; }</style>' + styled.to_html(escape=False) + '</div>', unsafe_allow_html=True)
 st.markdown("</div>", unsafe_allow_html=True)
 
 st.markdown("""
