@@ -166,10 +166,11 @@ def generate_custom_table(df):
         html += f"<tr><td><b>{symbol}</b></td>"
         for timeframe in TIMEFRAMES:
             for metric in ["TMV Score", "Trend Direction", "Reversal Probability"]:
-            try:
-                val = df.loc[symbol, (timeframe, metric)]
-            except:
-                val = ""
+                try:
+                    val = df.loc[symbol, (timeframe, metric)]
+                except:
+                    val = ""
+
                 if "Score" in metric:
                     html += f"<td>{render_badge(val)}</td>"
                 elif "Reversal" in metric:
