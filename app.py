@@ -127,7 +127,9 @@ display_df = final_df[score_cols].copy()
 display_df = display_df.sort_values(by=sort_column, ascending=sort_asc).head(limit)
 
 new_cols = []
-# Removed duplicate column renaming loop
+for col in display_df.columns:
+    if col == "Symbol":
+        new_cols.append(("Meta", "Symbol"))
     else:
         matched = False
         for tf in TIMEFRAMES:
