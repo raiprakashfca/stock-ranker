@@ -87,6 +87,10 @@ with st.spinner("🔍 Analyzing all timeframes..."):
             if not df.empty:
                 try:
                     result = calculate_scores(df)
+                    default_keys = ["Trend Score", "Momentum Score", "Volume Score", "Total Score", "Trend Direction", "Reversal Probability"]
+                    for key in default_keys:
+                        if key not in result:
+                            result[key] = "N/A" if "Direction" in key else 0.0
                     st.sidebar.write(f"📊 {symbol} [{label}]", result)
                     for key, value in result.items():
                         adjusted_key = "TMV Score" if key == "Total Score" else key
@@ -151,9 +155,9 @@ display_df = display_df.set_index(("Meta", "Symbol"))
 
 styled = display_df.style.format({
     col: (
-        render_badge if "TMV Score" in col[1] else
-        trend_direction_emoji if "Direction" in col[1] else
         reversal_indicator if "Reversal" in col[1] else
+        trend_direction_emoji if "Direction" in col[1] else
+        render_badge if "TMV Score" in col[1] else
         (lambda x: f"{x:.2f}" if isinstance(x, (int, float)) else x)
     ) for col in display_df.columns
 }, escape="html")
@@ -190,10 +194,14 @@ st.markdown("""
 # Export Excel
 excel_buffer = BytesIO()
 final_df.to_excel(excel_buffer, index=False)
+from datetime import datetime
+now = datetime.now().strftime("%Y-%m-%d_%H%M")
+st.caption(f"🕒 Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 st.download_button("📥 Download Excel", data=excel_buffer.getvalue(), file_name="stock_rankings.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 try:
     log_to_google_sheets(sheet_name="Combined", df=final_df)
     st.success("✅ Data saved to Google Sheet.")
 except Exception as e:
-    st.warning(f"⚠️ Sheet log failed: {e}")
+    st.error("Google Sheet sync failed. Please re-authenticate or check sheet name.")
+    st.exception(e)
