@@ -100,6 +100,7 @@ if not all_data:
     st.stop()
 
 final_df = pd.DataFrame(all_data)
+st.sidebar.write("✅ Final DF Columns", final_df.columns.tolist())
 
 st.markdown("### 🔎 Filter and Sort")
 sort_column = st.selectbox("Sort by", [col for col in final_df.columns if "Score" in col or "Reversal Probability" in col])
@@ -118,7 +119,7 @@ def render_badge(score):
     except:
         return score
 
-score_cols = [col for col in final_df.columns if "TMV Score" in col or "Trend Direction" in col or "Reversal Probability" in col or "Symbol" in col]
+score_cols = [col for col in final_df.columns if any(x in col for x in ["TMV Score", "Trend Direction", "Reversal Probability", "Symbol"]) ]
 detailed_cols = [col for col in final_df.columns if any(x in col for x in ["Trend Score", "Momentum Score", "Volume Score"])]
 display_df = final_df[score_cols].copy()
 
