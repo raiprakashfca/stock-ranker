@@ -127,8 +127,9 @@ display_df = display_df.sort_values(by=sort_column, ascending=sort_asc).head(lim
 
 display_df.columns = pd.MultiIndex.from_tuples([
     ("Meta", "Symbol") if col == "Symbol" else
-    (col.split("(")[-1].replace(")", "").strip(), col.split(" (")[0].strip())
+    (tf, col.replace(f" ({tf})", ""))
     for col in display_df.columns
+    for tf in TIMEFRAMES if f"({tf})" in col
 ])
 display_df = display_df.set_index(("Meta", "Symbol"))
 
