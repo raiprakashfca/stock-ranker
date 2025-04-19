@@ -5,7 +5,6 @@ import pandas_ta as ta
 def calculate_scores(df):
     result = {}
 
-    # Safety check: Ensure enough rows to calculate indicators
     if len(df) < 50:
         return {
             "Trend Score": 0.0,
@@ -65,7 +64,7 @@ def calculate_scores(df):
     else:
         direction = "Neutral"
 
-    # Reversal Logic: basic rule — if high RSI and weak trend, maybe reversal
+    # Reversal Probability
     reversal_probability = 0.0
     if rsi.iloc[-1] > 70 and trend_score <= 0.25:
         reversal_probability = 0.85
