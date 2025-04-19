@@ -94,8 +94,10 @@ with st.spinner("🔍 Analyzing all timeframes..."):
                         if key not in result:
                             result[key] = "N/A" if "Direction" in key else 0.0
                     st.sidebar.write(f"📊 {symbol} [{label}]", result)
-                    for key, value in result.items():
+                    for key, value in list(result.items()):
                         adjusted_key = "TMV Score" if key == "Total Score" else key
+                        if adjusted_key != key:
+                            result[adjusted_key] = result.pop(key)
                         colname = f"{adjusted_key} ({label})" if key != "Symbol" else key
                         row[colname] = value
                 except Exception as e:
