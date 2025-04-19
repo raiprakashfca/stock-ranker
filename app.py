@@ -46,7 +46,7 @@ def trend_direction_emoji(label):
         "Neutral": ("🟡 Neutral", "neutral")
     }
     emoji, css_class = styles.get(label, ("❓", "neutral"))
-    return f"<span class='direction {css_class}'>{emoji}</span>".get(label, "❓")
+    return f"<span class='direction {css_class}'>{emoji}</span>"
 
 # Helper for reversal probability
 def reversal_indicator(prob):
