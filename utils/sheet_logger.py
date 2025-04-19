@@ -1,6 +1,5 @@
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-import pandas as pd
 import json
 import streamlit as st
 
@@ -10,8 +9,7 @@ def log_to_google_sheets(sheet_name, df):
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
 
-    sheet = client.open("ZerodhaTokenStore")
-
+    sheet = client.open("Stock Rankings")  # This sheet stores strategy output
     try:
         worksheet = sheet.worksheet(sheet_name)
     except gspread.exceptions.WorksheetNotFound:
