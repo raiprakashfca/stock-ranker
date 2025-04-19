@@ -1,81 +1,62 @@
-import pandas as pd
-import datetime
-from kiteconnect import KiteConnect
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 import json
-import streamlit as st
-from urllib.parse import urlencode
+import os
+import pandas as pd
+from kiteconnect import KiteConnect
+from datetime import datetime
+from typing import Optional
 
-def get_kite():
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds_dict = json.loads(st.secrets["gspread_service_account"])
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    client = gspread.authorize(creds)
+# Path to token file (can be moved to env variable or Streamlit secret)
+TOKEN_FILE = "zerodhatokensaver-1b53153ffd25.json"
 
-    sheet = client.open("ZerodhaTokenStore")
-    worksheet = sheet.sheet1
-    tokens = worksheet.row_values(1)
-
-    if len(tokens) < 3:
-        st.warning("🔐 API credentials not found in 'ZerodhaTokenStore'. Please generate them below.")
-
-        api_key_input = st.text_input("Enter your Zerodha API Key")
-        api_secret_input = st.text_input("Enter your Zerodha API Secret")
-
-        if api_key_input and api_secret_input:
-            kite = KiteConnect(api_key=api_key_input)
-            redirect_url = "https://stock-ranker.streamlit.app/"  # Replace with your actual Streamlit URL
-            login_url = kite.login_url()
-            st.markdown(f"[🔑 Click here to generate Access Token]({login_url})")
-
-            request_token = st.text_input("Paste your request_token here")
-            if request_token:
-                try:
-                    data = kite.generate_session(request_token, api_secret=api_secret_input)
-                    access_token = data["access_token"]
-
-                    # Save back to Google Sheet
-                    worksheet.update("A1", [[api_key_input, api_secret_input, access_token]])
-                    st.success("✅ Access token generated and saved successfully. Please refresh the app.")
-                    st.stop()
-                except Exception as e:
-                    st.error(f"❌ Failed to generate session: {e}")
-                    st.stop()
-        else:
-            st.stop()
-
-    api_key, api_secret, access_token = tokens[0], tokens[1], tokens[2]
-
-    kite = KiteConnect(api_key=api_key)
-    kite.set_access_token(access_token)
-    return kite
-
-def get_instrument_token(kite, tradingsymbol):
+def authenticate_kite() -> Optional[KiteConnect]:
+    """
+    Authenticates and returns a KiteConnect object using saved credentials.
+    Returns None if credentials are invalid or missing.
+    """
     try:
-        instruments = kite.instruments(exchange="NSE")
-        for instrument in instruments:
-            if instrument["tradingsymbol"] == tradingsymbol:
-                return instrument["instrument_token"]
-        st.warning(f"⚠️ Instrument token not found for {tradingsymbol}")
+        with open(TOKEN_FILE, "r") as f:
+            creds = json.load(f)
+        
+        kite = KiteConnect(api_key=creds["api_key"])
+        kite.set_access_token(creds["access_token"])
+        # This will raise exception if token is invalid
+        kite.profile()
+        return kite
     except Exception as e:
-        st.error(f"⚠️ Error fetching instruments: {e}")
-    return None
+        print(f"[❌] Kite authentication failed: {e}")
+        return None
 
-def get_stock_data(kite, symbol, interval, days):
+def fetch_ohlcv_data(kite: KiteConnect, symbol: str, start: datetime, end: datetime, interval: str) -> pd.DataFrame:
+    """
+    Fetches OHLCV data for a given stock from Zerodha for the specified period and interval.
+    Returns a cleaned DataFrame with datetime index.
+    """
     try:
-        token = get_instrument_token(kite, symbol)
-        if not token:
+        # Mapping to exchange-specific symbols
+        exchange_token_map = {
+            "NSE": symbol
+        }
+
+        instrument = exchange_token_map.get("NSE")
+        if not instrument:
+            raise ValueError(f"Instrument token not found for {symbol}")
+
+        data = kite.historical_data(
+            instrument_token=kite.ltp(f"NSE:{symbol}")["NSE:" + symbol]["instrument_token"],
+            from_date=start,
+            to_date=end,
+            interval=interval,
+            continuous=False
+        )
+
+        if not data:
             return pd.DataFrame()
-        end_date = datetime.datetime.now()
-        start_date = end_date - datetime.timedelta(days=days)
-        data = kite.historical_data(token, start_date, end_date, interval)
+
         df = pd.DataFrame(data)
-        if df.empty:
-            st.warning(f"⚠️ No data returned for {symbol} ({interval})")
-        else:
-            df.set_index("date", inplace=True)
+        df.set_index("date", inplace=True)
+        df.index = pd.to_datetime(df.index)
         return df
+
     except Exception as e:
-        st.error(f"❌ Failed to fetch data for {symbol}: {e}")
+        print(f"[⚠️] Failed to fetch OHLCV data for {symbol}: {e}")
         return pd.DataFrame()
