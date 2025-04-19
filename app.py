@@ -78,34 +78,42 @@ final_df = pd.DataFrame(all_data)
 
 # Sort and Filter Section
 st.markdown("### 🔎 Filter and Sort")
-sort_column = st.selectbox("Sort by", [col for col in final_df.columns if "Total Score" in col])
+sort_column = st.selectbox("Sort by", [col for col in final_df.columns if "Score" in col])
 sort_asc = st.radio("Order", ["Descending", "Ascending"]) == "Ascending"
 limit = st.slider("Top N Symbols", 1, len(final_df), 10)
 
 # Score badge function
-score_badges = {}
 def render_badge(score):
-    if score >= 0.75:
-        return f"<span class='score-badge high'>{score:.2f} 📈</span>"
-    elif score >= 0.4:
-        return f"<span class='score-badge medium'>{score:.2f} ⚠️</span>"
-    else:
-        return f"<span class='score-badge low'>{score:.2f} ❌</span>"
+    try:
+        score = float(score)
+        if score >= 0.75:
+            return f"<span class='score-badge high'>🟢 {score:.2f}</span>"
+        elif score >= 0.4:
+            return f"<span class='score-badge medium'>🟡 {score:.2f}</span>"
+        else:
+            return f"<span class='score-badge low'>🔴 {score:.2f}</span>"
+    except:
+        return score
 
 # Display Sorted and Filtered
-score_cols = [col for col in final_df.columns if "Total Score" in col or "Symbol" in col or "Trend Score" in col or "Momentum Score" in col or "Volume Score" in col]
+score_cols = [col for col in final_df.columns if "Score" in col or "Symbol" in col]
 display_df = final_df[score_cols].copy()
 display_df = display_df.sort_values(by=sort_column, ascending=sort_asc).head(limit).set_index("Symbol")
 
-styled = display_df.style
-for col in display_df.columns:
-    if any(metric in col for metric in ["Total Score", "Trend Score", "Momentum Score", "Volume Score"]):
-        styled = styled.format({col: lambda x: render_badge(x)}, escape="html")
+styled = display_df.style.format({col: render_badge for col in display_df.columns}, escape="html")
 
 st.markdown("<div class='section-card'>", unsafe_allow_html=True)
 st.markdown("### 📈 Detailed Scores (Trend / Momentum / Volume)")
 st.write(styled.to_html(escape=False), unsafe_allow_html=True)
 st.markdown("</div>", unsafe_allow_html=True)
+
+# Score legend
+st.markdown("""
+#### 🔵 Score Legend
+- 🟢 **High Score (≥ 0.75)** — Strong trend, momentum, or volume
+- 🟡 **Moderate Score (0.4 – 0.74)** — Watch closely
+- 🔴 **Low Score (< 0.4)** — Weak or no signal
+""")
 
 # Explanation of what the scores mean
 with st.expander("ℹ️ How to interpret these scores"):
