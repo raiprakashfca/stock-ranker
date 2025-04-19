@@ -155,14 +155,31 @@ for col in display_df.columns:
 display_df.columns = pd.MultiIndex.from_tuples(new_cols)
 display_df = display_df.set_index(("Meta", "Symbol"))
 
-styled = display_df.style.format({
-    col: (
-        reversal_indicator if "reversal" in col[1].lower() else
-        trend_direction_emoji if "direction" in col[1].lower() else
-        render_badge if "tmv score" in col[1].lower() else
-        (lambda x: f"{x:.2f}" if isinstance(x, (int, float)) else x)
-    ) for col in display_df.columns
-}, escape="html")
+def generate_custom_table(df):
+    html = "<table style='width:100%; border-collapse:collapse;'>"
+    html += "<thead><tr><th>Symbol</th>"
+    for timeframe in TIMEFRAMES:
+        for metric in ["TMV Score", "Trend Direction", "Reversal Probability"]:
+            html += f"<th>{metric} ({timeframe})</th>"
+    html += "</tr></thead><tbody>"
+    for symbol in df.index:
+        html += f"<tr><td><b>{symbol}</b></td>"
+        for timeframe in TIMEFRAMES:
+            for metric in ["TMV Score", "Trend Direction", "Reversal Probability"]:
+                val = df.get((timeframe, metric), {}).get(symbol, "")
+                if "Score" in metric:
+                    html += f"<td>{render_badge(val)}</td>"
+                elif "Reversal" in metric:
+                    html += f"<td>{reversal_indicator(val)}</td>"
+                elif "Direction" in metric:
+                    html += f"<td>{trend_direction_emoji(val)}</td>"
+                else:
+                    html += f"<td>{val}</td>"
+        html += "</tr>"
+    html += "</tbody></table>"
+    return html
+
+st.markdown(generate_custom_table(display_df), unsafe_allow_html=True)
 
 st.markdown("<div class='section-card'>", unsafe_allow_html=True)
 st.markdown("### 📈 Detailed Scores (Trend / Momentum / Volume + Direction + Reversal)")
