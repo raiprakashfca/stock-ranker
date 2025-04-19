@@ -1,66 +1,70 @@
-import pandas_ta as ta
 import numpy as np
+import pandas_ta as ta
 
 def calculate_scores(df):
-    trend_score = 0
-    momentum_score = 0
-    volume_score = 0
+    df = df.copy()
+    df.dropna(inplace=True)
 
-    # Trend Indicators
-    df['EMA_8'] = ta.ema(df['Close'], length=8)
-    df['EMA_21'] = ta.ema(df['Close'], length=21)
-    df['HMA_21'] = ta.hma(df['Close'], length=21)
-    st = ta.supertrend(df['High'], df['Low'], df['Close'], length=10, multiplier=3.0)
-    df['ST'] = st[f'SUPERTd_10_3.0']
+    # Calculate indicators
+    df["EMA8"] = ta.ema(df["close"], length=8)
+    df["EMA21"] = ta.ema(df["close"], length=21)
+    df["MACD"] = ta.macd(df["close"]).iloc[:, 0]  # macd line
+    df["RSI"] = ta.rsi(df["close"], length=14)
+    df["ADX"] = ta.adx(df["high"], df["low"], df["close"]).iloc[:, 0]
+    df["OBV"] = ta.obv(df["close"], df["volume"])
+    df["MFI"] = ta.mfi(df["high"], df["low"], df["close"], df["volume"])
+    df["SUPERT"] = ta.supertrend(df["high"], df["low"], df["close"]).iloc[:, 0]
+    df["HULL"] = ta.hma(df["close"], length=14)
+    df["ALLIGATOR"] = ta.sma(df["close"], length=13)
+    df["FAMA"] = ta.linreg(df["close"], length=20)
 
-    if df['EMA_8'].iloc[-1] > df['EMA_21'].iloc[-1]:
-        trend_score += 1
-    if df['HMA_21'].iloc[-1] > df['HMA_21'].iloc[-2]:
-        trend_score += 1
-    if df['ST'].iloc[-1] == 1.0:
-        trend_score += 1
+    latest = df.iloc[-1]
+    prev = df.iloc[-2]
 
-    # Alligator Indicator
-    df['Jaw'] = ta.sma(df['Close'], length=13).shift(8)
-    df['Teeth'] = ta.sma(df['Close'], length=8).shift(5)
-    df['Lips'] = ta.sma(df['Close'], length=5).shift(3)
+    # Trend
+    scores = {
+        "ema_score": 1 if latest["EMA8"] > latest["EMA21"] else 0,
+        "alligator_score": 1 if latest["close"] > latest["ALLIGATOR"] else 0,
+        "fractal_ama_score": 1 if latest["close"] > latest["FAMA"] else 0,
+        "hull_ma_score": 1 if latest["close"] > latest["HULL"] else 0,
+        "supertrend_score": 1 if latest["close"] > latest["SUPERT"] else 0,
 
-    if df['Lips'].iloc[-1] > df['Teeth'].iloc[-1] > df['Jaw'].iloc[-1]:
-        trend_score += 1
+        # Momentum
+        "macd_score": 1 if latest["MACD"] > 0 else 0,
+        "rsi_score": 1 if latest["RSI"] > 50 else 0,
+        "adx_score": 1 if latest["ADX"] > 20 else 0,
 
-    # Fractal AMA (simple slope of smoothed close)
-    smoothed = df['Close'].rolling(window=5).mean()
-    if smoothed.iloc[-1] > smoothed.iloc[-2]:
-        trend_score += 1
+        # Volume
+        "obv_score": 1 if latest["OBV"] > prev["OBV"] else 0,
+        "mfi_score": 1 if 45 <= latest["MFI"] <= 80 else 0,
+    }
 
-    # Momentum Indicators
-    macd = ta.macd(df['Close'])
-    df['MACD'], df['MACD_signal'] = macd['MACD_12_26_9'], macd['MACDs_12_26_9']
-    df['RSI'] = ta.rsi(df['Close'], length=14)
-    adx = ta.adx(df['High'], df['Low'], df['Close'])
-    df['ADX'], df['+DI'], df['-DI'] = adx['ADX_14'], adx['DMP_14'], adx['DMN_14']
+    # Weights
+    trend_weights = {
+        "ema_score": 0.25,
+        "alligator_score": 0.15,
+        "fractal_ama_score": 0.20,
+        "hull_ma_score": 0.20,
+        "supertrend_score": 0.20
+    }
+    momentum_weights = {
+        "macd_score": 0.40,
+        "rsi_score": 0.30,
+        "adx_score": 0.30
+    }
+    volume_weights = {
+        "obv_score": 0.60,
+        "mfi_score": 0.40
+    }
 
-    if df['MACD'].iloc[-1] > df['MACD_signal'].iloc[-1]:
-        momentum_score += 1
-    if 55 < df['RSI'].iloc[-1] < 70:
-        momentum_score += 1
-    if df['ADX'].iloc[-1] > 20 and df['+DI'].iloc[-1] > df['-DI'].iloc[-1]:
-        momentum_score += 1
-
-    # Volume Indicators
-    df['OBV'] = ta.obv(df['Close'], df['Volume'])
-    df['MFI'] = ta.mfi(df['High'], df['Low'], df['Close'], df['Volume'])
-
-    if df['OBV'].iloc[-1] > df['OBV'].iloc[-2]:
-        volume_score += 1
-    if 55 < df['MFI'].iloc[-1] < 80:
-        volume_score += 1
-
-    total_score = trend_score + momentum_score + volume_score
+    trend_score = sum([scores[k] * w for k, w in trend_weights.items()])
+    momentum_score = sum([scores[k] * w for k, w in momentum_weights.items()])
+    volume_score = sum([scores[k] * w for k, w in volume_weights.items()])
+    total_score = trend_score * 0.5 + momentum_score * 0.35 + volume_score * 0.15
 
     return {
-        "Trend": trend_score,
-        "Momentum": momentum_score,
-        "Volume": volume_score,
+        "Trend Score": trend_score,
+        "Momentum Score": momentum_score,
+        "Volume Score": volume_score,
         "Total Score": total_score
     }
