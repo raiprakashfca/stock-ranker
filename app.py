@@ -35,41 +35,16 @@ st.markdown("""
 
 st.title("📊 Multi-Timeframe Stock Ranking Dashboard")
 
-# Login Section
-with st.sidebar:
-    st.header("🔐 Zerodha Login")
-    api_key_input = st.text_input("API Key")
-    api_secret_input = st.text_input("API Secret", type="password")
-    request_token_input = st.text_input("Request Token")
+# Load credentials and token from Google Sheet
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+creds_dict = json.loads(st.secrets["gspread_service_account"])
+creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+client = gspread.authorize(creds)
+sheet = client.open("ZerodhaTokenStore").sheet1
+tokens = sheet.get_all_values()[0]
 
-    kite = None
-    if api_key_input and api_secret_input:
-        kite = KiteConnect(api_key=api_key_input)
-        login_url = kite.login_url()
-        st.markdown(f"[🔑 Generate Request Token]({login_url})")
-
-        if request_token_input:
-            try:
-                data = kite.generate_session(request_token_input, api_secret=api_secret_input)
-                access_token = data["access_token"]
-                kite.set_access_token(access_token)
-
-                scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-                creds_dict = json.loads(st.secrets["gspread_service_account"])
-                creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-                client = gspread.authorize(creds)
-                sheet = client.open("ZerodhaTokenStore")
-                sheet.sheet1.update("A1", [[api_key_input, api_secret_input, access_token]])
-                st.success("✅ Access token saved.")
-            except Exception as e:
-                st.error(f"❌ Token generation failed: {e}")
-                st.stop()
-    else:
-        st.info("ℹ️ Enter credentials to begin")
-        st.stop()
-
-if not kite:
-    st.stop()
+kite = KiteConnect(api_key=tokens[0])
+kite.set_access_token(tokens[2])
 
 # Timeframe Configs
 TIMEFRAMES = {
