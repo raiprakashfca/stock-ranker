@@ -134,6 +134,19 @@ for col in display_df.columns:
         matched = False
         for tf in TIMEFRAMES:
             if f"({tf})" in col:
+                base = col.replace(f" ({tf})", "").replace("Reversal Probability", "Reversal")
+                new_cols.append((tf, base))
+                matched = True
+                break
+        if not matched:
+            new_cols.append(("Other", col))
+for col in display_df.columns:
+    if col == "Symbol":
+        new_cols.append(("Meta", "Symbol"))
+    else:
+        matched = False
+        for tf in TIMEFRAMES:
+            if f"({tf})" in col:
                 new_cols.append((tf, col.replace(f" ({tf})", "")))
                 matched = True
                 break
