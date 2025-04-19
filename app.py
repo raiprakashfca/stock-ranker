@@ -87,6 +87,7 @@ with st.spinner("🔍 Analyzing all timeframes..."):
             if not df.empty:
                 try:
                     result = calculate_scores(df)
+                    st.sidebar.write(f"📊 {symbol} [{label}]", result)
                     for key, value in result.items():
                         adjusted_key = "TMV Score" if key == "Total Score" else key
                         colname = f"{adjusted_key} ({label})" if key != "Symbol" else key
