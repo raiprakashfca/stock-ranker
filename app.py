@@ -119,13 +119,11 @@ def render_badge(score):
 score_cols = [col for col in final_df.columns if "Score" in col or "Symbol" in col or "Trend Direction" in col or "Reversal Probability" in col]
 display_df = final_df[score_cols].copy()
 
-# Insert separator columns between timeframes
-for tf in ["15m", "1h"]:
-    insert_col = f"― Separator ({tf}) ―"
-    col_index = [i for i, c in enumerate(display_df.columns) if f"({tf})" in c][-1] + 1
-    display_df.insert(col_index, insert_col, '<div style="background-color:#cfd8dc; height:100%; width:100%;">&nbsp;</div>')
+# Remove previous separator column logic — now handled via grouping only
+# No need to insert manual separator columns
 
-display_df = display_df.sort_values(by=sort_column, ascending=sort_asc).head(limit).set_index("Symbol")
+# Sort and index
+(by=sort_column, ascending=sort_asc).head(limit).set_index("Symbol")
 
 display_df.columns = pd.MultiIndex.from_tuples([
     ("15m", col) if "(15m)" in col else
