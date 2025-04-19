@@ -88,7 +88,8 @@ with st.spinner("🔍 Analyzing all timeframes..."):
                 try:
                     result = calculate_scores(df)
                     for key, value in result.items():
-                        row[f"{key} ({label})"] = value
+                        colname = f"{key} ({label})" if key != "Symbol" else key
+                        row[colname] = value
                 except Exception as e:
                     st.warning(f"⚠️ {symbol} ({label}) failed: {e}")
         all_data.append(row)
@@ -100,7 +101,7 @@ if not all_data:
 final_df = pd.DataFrame(all_data)
 
 st.markdown("### 🔎 Filter and Sort")
-sort_column = st.selectbox("Sort by", [col for col in final_df.columns if "Score" in col])
+sort_column = st.selectbox("Sort by", [col for col in final_df.columns if "Score" in col or "Reversal Probability" in col])
 sort_asc = st.radio("Order", ["Descending", "Ascending"]) == "Ascending"
 limit = st.slider("Top N Symbols", 1, len(final_df), 10)
 
@@ -147,13 +148,20 @@ styled = display_df.style.format({
         render_badge if "Score" in col else
         trend_direction_emoji if "Trend Direction" in col else
         reversal_indicator if "Reversal Probability" in col else
-        "{:.2f}"
+        (lambda x: f"{x:.2f}" if isinstance(x, (int, float)) else x)
     ) for col in display_df.columns
 }, escape="html")
 
 st.markdown("<div class='section-card'>", unsafe_allow_html=True)
 st.markdown("### 📈 Detailed Scores (Trend / Momentum / Volume + Direction + Reversal)")
-st.markdown('<div style="overflow-x: auto;"><style>th:first-child, td:first-child { position: sticky; left: 0; background-color: #1e1e1e; z-index: 1; color: white; }</style>' + styled.to_html(escape=False) + '</div>', unsafe_allow_html=True)
+st.markdown('<div style="overflow-x: auto;"><style>th:first-child, td:first-child {
+  position: sticky;
+  left: 0;
+  background-color: #2a2a2a;
+  z-index: 2;
+  color: #fff;
+  font-weight: bold;
+}</style>' + styled.to_html(escape=False) + '</div>', unsafe_allow_html=True)
 st.markdown("</div>", unsafe_allow_html=True)
 
 st.markdown("""
