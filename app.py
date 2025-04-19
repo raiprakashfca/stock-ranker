@@ -155,9 +155,9 @@ display_df = display_df.set_index(("Meta", "Symbol"))
 
 styled = display_df.style.format({
     col: (
-        reversal_indicator if "Reversal" in col[1] else
-        trend_direction_emoji if "Direction" in col[1] else
-        render_badge if "TMV Score" in col[1] else
+        reversal_indicator if "reversal" in col[1].lower() else
+        trend_direction_emoji if "direction" in col[1].lower() else
+        render_badge if "tmv score" in col[1].lower() else
         (lambda x: f"{x:.2f}" if isinstance(x, (int, float)) else x)
     ) for col in display_df.columns
 }, escape="html")
