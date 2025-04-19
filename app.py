@@ -13,6 +13,8 @@ st.set_page_config(page_title="📊 Multi-Timeframe Stock Ranking Dashboard", la
 
 st.markdown("""
     <style>
+    th, td { border-right: 1px solid #ddd; }
+
     .score-badge {
         display: inline-block;
         padding: 6px 12px;
@@ -121,7 +123,7 @@ styled = display_df.style.format({
 
 st.markdown("<div class='section-card'>", unsafe_allow_html=True)
 st.markdown("### 📈 Detailed Scores (Trend / Momentum / Volume + Direction + Reversal)")
-st.write(styled.to_html(escape=False), unsafe_allow_html=True)
+st.markdown('<div style="overflow-x: auto;"><style>th:first-child, td:first-child { position: sticky; left: 0; background-color: #f9f9f9; z-index: 1; }</style>' + styled.to_html(escape=False) + '</div>', unsafe_allow_html=True)
 st.markdown("</div>", unsafe_allow_html=True)
 
 st.markdown("""
