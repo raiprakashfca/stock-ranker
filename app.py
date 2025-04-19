@@ -142,18 +142,15 @@ new_cols = []
 for col in display_df.columns:
     if col == "Symbol":
         new_cols.append(("Meta", "Symbol"))
-    else:
-        matched = False
-        for tf in TIMEFRAMES:
-            if f" ({tf})" in col:
-                base = col.replace(f" ({tf})", "")
-                new_cols.append((tf, base))
-                matched = True
-                break
-        if not matched:
+    elif "(" in col and ")" in col:
+        try:
+            base, tf = col.rsplit(" (", 1)
+            tf = tf.replace(")", "")
+            new_cols.append((tf, base))
+        except:
             new_cols.append(("Other", col))
-
-
+    else:
+        new_cols.append(("Other", col))
 display_df.columns = pd.MultiIndex.from_tuples(new_cols)
 display_df = display_df.set_index(("Meta", "Symbol"))
 
