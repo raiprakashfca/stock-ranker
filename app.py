@@ -117,7 +117,7 @@ def render_badge(score):
     except:
         return score
 
-score_cols = [col for col in final_df.columns if "Score" in col or "Symbol" in col or "Trend Direction" in col or "Reversal Probability" in col]
+score_cols = [col for col in final_df.columns if "Score" in col or "Symbol" in col or "Direction" in col or "Reversal" in col]
 display_df = final_df[score_cols].copy()
 
 # Remove previous separator column logic — now handled via grouping only
