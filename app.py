@@ -127,31 +127,18 @@ display_df = final_df[score_cols].copy()
 display_df = display_df.sort_values(by=sort_column, ascending=sort_asc).head(limit)
 
 new_cols = []
-for col in display_df.columns:
-    if col == "Symbol":
-        new_cols.append(("Meta", "Symbol"))
+# Removed duplicate column renaming loop
     else:
         matched = False
         for tf in TIMEFRAMES:
             if f"({tf})" in col:
-                base = col.replace(f" ({tf})", "").replace("Reversal Probability", "Reversal")
+                base = col.replace(f" ({tf})", "")
                 new_cols.append((tf, base))
                 matched = True
                 break
         if not matched:
             new_cols.append(("Other", col))
-for col in display_df.columns:
-    if col == "Symbol":
-        new_cols.append(("Meta", "Symbol"))
-    else:
-        matched = False
-        for tf in TIMEFRAMES:
-            if f"({tf})" in col:
-                new_cols.append((tf, col.replace(f" ({tf})", "")))
-                matched = True
-                break
-        if not matched:
-            new_cols.append(("Other", col))
+
 
 display_df.columns = pd.MultiIndex.from_tuples(new_cols)
 display_df = display_df.set_index(("Meta", "Symbol"))
