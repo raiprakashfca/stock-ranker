@@ -40,22 +40,24 @@ st.title("📊 Multi-Timeframe Stock Ranking Dashboard")
 
 # Helper for trend direction
 def trend_direction_emoji(label):
-    return {
-        "Bullish": "🟢 Bullish",
-        "Bearish": "🔴 Bearish",
-        "Neutral": "🟡 Neutral"
-    }.get(label, "❓")
+    styles = {
+        "Bullish": ("🟢 Bullish", "bullish"),
+        "Bearish": ("🔴 Bearish", "bearish"),
+        "Neutral": ("🟡 Neutral", "neutral")
+    }
+    emoji, css_class = styles.get(label, ("❓", "neutral"))
+    return f"<span class='direction {css_class}'>{emoji}</span>".get(label, "❓")
 
 # Helper for reversal probability
 def reversal_indicator(prob):
     try:
         prob = float(prob)
         if prob >= 0.7:
-            return f"🔄 {prob:.2f}"
+            return f"<span class='score-badge high'>🔄 {prob:.2f}</span>"
         elif prob >= 0.4:
-            return f"➖ {prob:.2f}"
+            return f"<span class='score-badge medium'>➖ {prob:.2f}</span>"
         else:
-            return f"✅ {prob:.2f}"
+            return f"<span class='score-badge low'>✅ {prob:.2f}</span>"
     except:
         return prob
 
