@@ -88,7 +88,8 @@ with st.spinner("🔍 Analyzing all timeframes..."):
                 try:
                     result = calculate_scores(df)
                     for key, value in result.items():
-                        colname = f"{key} ({label})" if key != "Symbol" else key
+                        adjusted_key = "TMV Score" if key == "Total Score" else key
+                        colname = f"{adjusted_key} ({label})" if key != "Symbol" else key
                         row[colname] = value
                 except Exception as e:
                     st.warning(f"⚠️ {symbol} ({label}) failed: {e}")
@@ -117,9 +118,9 @@ def render_badge(score):
     except:
         return score
 
-score_cols = [col for col in final_df.columns if "Total Score" in col or "Trend Direction" in col or "Reversal Probability" in col or "Symbol" in col]
+score_cols = [col for col in final_df.columns if "TMV Score" in col or "Trend Direction" in col or "Reversal Probability" in col or "Symbol" in col]
 detailed_cols = [col for col in final_df.columns if any(x in col for x in ["Trend Score", "Momentum Score", "Volume Score"])]
-display_df = final_df[[*score_cols, *detailed_cols]].copy()
+display_df = final_df[score_cols].copy()
 
 # Remove previous separator column logic — now handled via grouping only
 # No need to insert manual separator columns
@@ -148,7 +149,7 @@ display_df = display_df.set_index(("Meta", "Symbol"))
 
 styled = display_df.style.format({
     col: (
-        render_badge if "Total Score" in col[1] else
+        render_badge if "TMV Score" in col[1] else
         trend_direction_emoji if "Direction" in col[1] else
         reversal_indicator if "Reversal" in col[1] else
         (lambda x: f"{x:.2f}" if isinstance(x, (int, float)) else x)
