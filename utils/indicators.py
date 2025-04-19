@@ -63,8 +63,22 @@ def calculate_scores(df):
     total_score = trend_score * 0.5 + momentum_score * 0.35 + volume_score * 0.15
 
     return {
+        # Final weighted scores
         "Trend Score": trend_score,
         "Momentum Score": momentum_score,
         "Volume Score": volume_score,
-        "Total Score": total_score
+        "Total Score": total_score,
+
+        # Raw indicator values (for UI display)
+        "EMA8": latest["EMA8"],
+        "EMA21": latest["EMA21"],
+        "MACD": latest["MACD"],
+        "RSI": latest["RSI"],
+        "ADX": latest["ADX"],
+        "OBV": latest["OBV"],
+        "MFI": latest["MFI"],
+        "SUPERT": latest["SUPERT"],
+        "HULL": latest["HULL"],
+        "ALLIGATOR": latest["ALLIGATOR"],
+        "FAMA": latest["FAMA"]
     }
