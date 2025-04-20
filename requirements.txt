@@ -7,3 +7,4 @@ kiteconnect
 gspread
 oauth2client
 openpyxl
+websocket-client
