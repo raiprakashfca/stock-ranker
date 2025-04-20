@@ -5,6 +5,7 @@ import gspread
 import json
 from oauth2client.service_account import ServiceAccountCredentials
 from io import BytesIO
+
 from utils.zerodha import get_stock_data
 from utils.indicators import calculate_scores
 from utils.sheet_logger import log_to_google_sheets
@@ -79,13 +80,12 @@ TIMEFRAMES = {
 }
 SYMBOLS = [
     "ADANIENT", "ADANIPORTS", "APOLLOHOSP", "ASIANPAINT", "AXISBANK", "BAJAJ-AUTO",
-    "BAJFINANCE", "BAJAJFINSV", "BPCL", "BHARTIARTL", "BRITANNIA", "CIPLA",
-    "COALINDIA", "DIVISLAB", "DRREDDY", "EICHERMOT", "GRASIM", "HCLTECH",
-    "HDFCBANK", "HDFCLIFE", "HEROMOTOCO", "HINDALCO", "HINDUNILVR", "ICICIBANK",
-    "ITC", "INDUSINDBK", "INFY", "JSWSTEEL", "KOTAKBANK", "LT", "M&M", "MARUTI",
-    "NTPC", "NESTLEIND", "ONGC", "POWERGRID", "RELIANCE", "SBILIFE", "SBIN",
-    "SUNPHARMA", "TCS", "TATACONSUM", "TATAMOTORS", "TATASTEEL", "TECHM",
-    "TITAN", "UPL", "ULTRACEMCO", "WIPRO"
+    "BAJAJFINSV", "BPCL", "BHARTIARTL", "BRITANNIA", "CIPLA", "COALINDIA", "DIVISLAB",
+    "DRREDDY", "EICHERMOT", "GRASIM", "HCLTECH", "HDFCBANK", "HDFCLIFE", "HEROMOTOCO",
+    "HINDALCO", "HINDUNILVR", "ICICIBANK", "ITC", "INDUSINDBK", "INFY", "JSWSTEEL", "KOTAKBANK",
+    "LT", "M&M", "MARUTI", "NTPC", "NESTLEIND", "ONGC", "POWERGRID", "RELIANCE", "SBILIFE",
+    "SBIN", "SUNPHARMA", "TCS", "TATACONSUM", "TATAMOTORS", "TATASTEEL", "TECHM", "TITAN",
+    "UPL", "ULTRACEMCO", "WIPRO"
 ]
 
 # Data extraction
@@ -123,29 +123,30 @@ for col in df.columns:
 df.columns = pd.MultiIndex.from_tuples(columns)
 df = df.set_index(("Meta", "Symbol"))
 
-# Highlighting rows based on conditions
+# Highlight rows based on conditions
 def highlight_rows(row):
     if (
-        row["15m | Trend Direction"] == "Bullish" and
-        row["1h | Trend Direction"] == "Bullish" and
-        row["1d | Trend Direction"] == "Bullish" and
-        row["TMV Score (15m)"] >= 0.8 and
-        row["TMV Score (1h)"] >= 0.8 and
-        row["TMV Score (1d)"] >= 0.8
+        row[("15m", "Trend Direction")] == "Bullish" and
+        row[("1h", "Trend Direction")] == "Bullish" and
+        row[("1d", "Trend Direction")] == "Bullish" and
+        row[("15m", "TMV Score")] >= 0.8 and
+        row[("1h", "TMV Score")] >= 0.8 and
+        row[("1d", "TMV Score")] >= 0.8
     ):
         return ["background-color: #28a745"] * len(row)
     elif (
-        row["15m | Trend Direction"] == "Bearish" and
-        row["1h | Trend Direction"] == "Bearish" and
-        row["1d | Trend Direction"] == "Bearish" and
-        row["TMV Score (15m)"] >= 0.8 and
-        row["TMV Score (1h)"] >= 0.8 and
-        row["TMV Score (1d)"] >= 0.8
+        row[("15m", "Trend Direction")] == "Bearish" and
+        row[("1h", "Trend Direction")] == "Bearish" and
+        row[("1d", "Trend Direction")] == "Bearish" and
+        row[("15m", "TMV Score")] >= 0.8 and
+        row[("1h", "TMV Score")] >= 0.8 and
+        row[("1d", "TMV Score")] >= 0.8
     ):
         return ["background-color: #dc3545"] * len(row)
     else:
         return [""] * len(row)
 
+# Apply styles
 styled_df = df.style.apply(highlight_rows, axis=1)
 
 # Display improvements
@@ -167,7 +168,7 @@ th[colspan="3"] {
 
 st.markdown("### 🧠 Ranked Score Table")
 df_primary = df[[col for col in df.columns if col[1] in ['TMV Score', 'Trend Direction', 'Reversal Probability']]]
-st.dataframe(styled_df, use_container_width=True, hide_index=False)
+st.dataframe(df_primary, use_container_width=True, hide_index=False)
 
 with st.expander("📊 Show Detailed Trend/Momentum/Volume Scores"):
     df_detailed = df[[col for col in df.columns if col[1] in ['Trend Score', 'Momentum Score', 'Volume Score']]]
