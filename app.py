@@ -13,12 +13,22 @@ from utils.sheet_logger import log_to_google_sheets
 st.set_page_config(page_title="📊 Stock Ranker Dashboard", layout="wide")
 st.title("📊 Multi-Timeframe Stock Ranking Dashboard")
 
+# 🔐 Force sidebar to appear
+st.sidebar.title("⚙️ Settings")
+st.sidebar.info("Zerodha login and token management panel")
+
 # 🔐 Always-visible sidebar token handler
 with st.sidebar.expander("🔐 Zerodha Access Token", expanded=False):
     st.markdown("This panel lets you manage Zerodha API tokens manually if needed.")
 
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds_dict = json.loads(st.secrets["gspread_service_account"])
+    try:
+        creds_dict = json.loads(st.secrets["gspread_service_account"])
+    except Exception as e:
+        st.sidebar.error("❌ Failed to load Google service account secrets.")
+        st.sidebar.exception(e)
+        st.stop()
+
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
     sheet = client.open("ZerodhaTokenStore").sheet1
@@ -91,4 +101,6 @@ if all_data:
         log_to_google_sheets("Combined", df)
         st.success("✅ Logged to Google Sheet")
     except Exception as e:
-        st.warning(f"⚠️ Sheet
+        st.warning(f"⚠️ Sheet log failed: {e}")
+else:
+    st.error("❌ No data available for any symbol")
