@@ -156,7 +156,13 @@ display_df = final_df[score_cols].copy()
 # No need to insert manual separator columns
 
 # Sort and index
-display_df = display_df.sort_values(by=sort_column, ascending=sort_asc).head(limit)
+try:
+    tf_part = sort_column.split("(")[-1].replace(")", "").strip()
+    label_part = sort_column.split("(")[0].strip()
+    sort_col_index = (tf_part, label_part)
+    display_df = display_df.sort_values(by=sort_col_index, ascending=sort_asc).head(limit)
+except KeyError:
+    st.warning(f"⚠️ Column {sort_column} not found in data. Sorting skipped.")
 
 new_cols = []
 for col in display_df.columns:
