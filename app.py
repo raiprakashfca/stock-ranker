@@ -135,7 +135,8 @@ th[colspan="3"] {
 """, unsafe_allow_html=True)
 
 st.markdown("### 🧠 Ranked Score Table")
-st.dataframe(df, use_container_width=True, hide_index=False)
+with st.expander("📊 Expand Ranked Scores", expanded=True):
+    st.dataframe(df, use_container_width=True, hide_index=False)
 
 # Save to Excel
 excel_buffer = BytesIO()
