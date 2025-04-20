@@ -73,7 +73,7 @@ kite = KiteConnect(api_key=tokens[0])
 try:
     kite.set_access_token(tokens[2])
 except Exception as e:
-    if 'Incorrect api_key or access_token' in str(e):
+    if any(keyword in str(e) for keyword in ["Incorrect api_key", "TokenException", "TokenExpired", "Invalid session"]):
         st.sidebar.error("🔐 Access token expired or invalid.")
         api_key = tokens[0]
         st.sidebar.markdown(f"[🔁 Click here to login and generate new token](https://kite.zerodha.com/connect/login?v=3&api_key={api_key})")
