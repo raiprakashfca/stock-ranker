@@ -76,12 +76,11 @@ with st.spinner("🔄 Fetching and scoring data..."):
         for label, config in TIMEFRAMES.items():
             df = get_stock_data(kite, symbol, config["interval"], config["days"])
             if df.empty:
-                st.warning(f"⚠️ No data for {symbol} [{label}]")
                 continue
             try:
                 result = calculate_scores(df)
                 for key, value in result.items():
-                    row[f"{key} ({label})"] = value
+                    row[f"{label} | {key}"] = value
             except Exception as e:
                 st.warning(f"⚠️ Failed scoring {symbol} [{label}]: {e}")
         all_data.append(row)
@@ -90,23 +89,57 @@ with st.spinner("🔄 Fetching and scoring data..."):
 if all_data:
     df = pd.DataFrame(all_data)
 
-    # Fallback for missing sort column
-    default_sort_col = next((col for col in df.columns if "TMV Score" in col), None)
-    if default_sort_col:
-        df = df.sort_values(by=default_sort_col, ascending=False)
+    # Format column levels
+    new_cols = []
+    for col in df.columns:
+        if col == "Symbol":
+            new_cols.append(("Meta", "Symbol"))
+        elif "|" in col:
+            tf, metric = map(str.strip, col.split("|"))
+            new_cols.append((tf, metric))
+        else:
+            new_cols.append(("Other", col))
 
-    st.dataframe(df, use_container_width=True)
+    df.columns = pd.MultiIndex.from_tuples(new_cols)
+    df = df.set_index(("Meta", "Symbol"))
+
+    # Score to badge
+    def format_badge(val):
+        try:
+            val = float(val)
+            if val >= 0.75:
+                return f"🟢 {val:.2f}"
+            elif val >= 0.4:
+                return f"🟡 {val:.2f}"
+            else:
+                return f"🔴 {val:.2f}"
+        except:
+            return val
+
+    styled_df = df.style.format(format_badge)
+    st.markdown("### 📈 Ranked Scores Across Timeframes")
+    st.markdown("<div style='overflow-x:auto'>" + styled_df.to_html(escape=False) + "</div>", unsafe_allow_html=True)
 
     # 💾 Export
     excel_buffer = BytesIO()
-    df.to_excel(excel_buffer, index=False)
+    flat_df = df.reset_index()
+    flat_df.columns = [' '.join(col).strip() if isinstance(col, tuple) else col for col in flat_df.columns]
+    flat_df.to_excel(excel_buffer, index=False)
     st.download_button("📥 Download Excel", data=excel_buffer.getvalue(), file_name="stock_rankings.xlsx")
 
     # 📤 Sheet sync
     try:
-        log_to_google_sheets("Combined", df)
+        log_to_google_sheets("Combined", flat_df)
         st.success("✅ Logged to Google Sheet")
     except Exception as e:
         st.warning(f"⚠️ Sheet log failed: {e}")
+
+    # 📘 Legend
+    st.markdown("""
+    ### 🟢🟡🔴 Legend
+    - **🟢 ≥ 0.75** = Strong
+    - **🟡 0.4 - 0.75** = Moderate
+    - **🔴 < 0.4** = Weak
+    """)
 else:
     st.error("❌ No data available for any symbol")
