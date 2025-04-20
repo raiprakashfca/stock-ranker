@@ -19,7 +19,7 @@ def log_to_google_sheets(sheet_name, df):
             st.warning("🛑 Sheet log failed: Provided data is not a DataFrame")
             return
 
-        creds_dict = st.secrets["gspread_service_account"]
+        creds_dict = json.loads(st.secrets["gspread_service_account"])
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
         sheet = client.open("Stock Rankings").worksheet(sheet_name)
