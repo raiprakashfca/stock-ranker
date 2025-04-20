@@ -8,7 +8,28 @@ from io import BytesIO
 
 from utils.zerodha import get_stock_data
 from utils.indicators import calculate_scores
+
+# Updated log_to_google_sheets with validation
 from utils.sheet_logger import log_to_google_sheets
+
+def log_to_google_sheets(sheet_name, df):
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    try:
+        if not isinstance(df, pd.DataFrame):
+            st.warning("🛑 Sheet log failed: Provided data is not a DataFrame")
+            return
+
+        creds_dict = st.secrets["gspread_service_account"]
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+        client = gspread.authorize(creds)
+        sheet = client.open("Stock Rankings").worksheet(sheet_name)
+
+        df = df.round(2)
+        sheet.clear()
+        data = [df.columns.tolist()] + df.values.tolist()
+        sheet.update("A1", data)
+    except Exception as e:
+        st.warning(f"⚠️ Could not update Google Sheet: {e}")
 
 st.set_page_config(page_title="📊 Stock Ranker Dashboard", layout="wide", initial_sidebar_state="expanded")
 st.title("📊 Multi-Timeframe Stock Ranking Dashboard")
@@ -125,7 +146,9 @@ st.download_button("📥 Download Excel", data=excel_buffer.getvalue(), file_nam
 
 # Sync to Sheet
 try:
-    log_to_google_sheets("Combined", flat_df)
-    st.success("✅ Logged to Google Sheet")
+    if isinstance(flat_df, pd.DataFrame):
+        log_to_google_sheets("Combined", flat_df)
+    else:
+        st.warning("⚠️ Skipped Google Sheet log: flat_df is not a valid DataFrame")
 except Exception as e:
     st.warning(f"⚠️ Sheet log failed: {e}")
