@@ -6,6 +6,11 @@ from oauth2client.service_account import ServiceAccountCredentials
 def log_to_google_sheets(sheet_name, df):
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     try:
+        # ✅ Defensive check to avoid 'str' issues
+        if not isinstance(df, pd.DataFrame):
+            st.warning("🛑 Sheet log failed: Provided data is not a DataFrame")
+            return
+
         creds_dict = st.secrets["gspread_service_account"]
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
