@@ -89,6 +89,12 @@ with st.spinner("🔄 Fetching and scoring data..."):
 # 🪄 Compile & Display
 if all_data:
     df = pd.DataFrame(all_data)
+
+    # Fallback for missing sort column
+    default_sort_col = next((col for col in df.columns if "TMV Score" in col), None)
+    if default_sort_col:
+        df = df.sort_values(by=default_sort_col, ascending=False)
+
     st.dataframe(df, use_container_width=True)
 
     # 💾 Export
