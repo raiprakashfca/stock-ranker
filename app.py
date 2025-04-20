@@ -48,7 +48,7 @@ if not kite:
     st.error("❌ Kite authentication failed. Check token or API credentials.")
     st.stop()
 
-# Fetch and compute
+# Fetch and compute indicator data
 @st.cache_data(ttl=300)
 def fetch_and_rank_stocks(stocks, start, end, interval):
     results = []
@@ -64,7 +64,7 @@ def fetch_and_rank_stocks(stocks, start, end, interval):
             st.error(f"⚠️ Error processing {stock}: {str(e)}")
     return pd.DataFrame(results)
 
-# Process and show results
+# Analyze and rank stocks
 with st.spinner("🔍 Analyzing data..."):
     end = datetime.datetime.now()
     rankings = fetch_and_rank_stocks(selected_stocks, start, end, timeframe)
@@ -73,12 +73,50 @@ if rankings.empty:
     st.warning("🚫 No data available for the selected timeframe or stocks.")
     st.stop()
 
-# Sort and display
-rankings = rankings.sort_values("Score", ascending=False)
-st.success("✅ Analysis complete.")
-st.dataframe(rankings.style.background_gradient(cmap="Greens"))
+# Add Trend Direction and Reversal Probability
+def interpret_trend(row):
+    if row["Trend_Score"] == 3:
+        return "Strong Uptrend"
+    elif row["Trend_Score"] == 2:
+        return "Moderate Uptrend"
+    elif row["Trend_Score"] == 1:
+        return "Weak / Sideways"
+    else:
+        return "Downtrend"
 
-# Log to Google Sheets
+rankings["Trend_Direction"] = rankings.apply(interpret_trend, axis=1)
+rankings["Reversal_Probability (%)"] = rankings["Reversal_Probability"].round(2)
+
+# Sort by overall Score
+rankings = rankings.sort_values("Score", ascending=False)
+
+# Display full ranked table
+st.success("✅ Analysis complete.")
+st.subheader("📊 Ranked Stocks with Technical Scores")
+
+st.dataframe(
+    rankings[
+        ["Stock", "Score", "Trend_Score", "Momentum_Score", "Volume_Score",
+         "Trend_Direction", "Reversal_Probability (%)"]
+    ].reset_index(drop=True).style.background_gradient(cmap="Greens", subset=["Score"])
+)
+
+# Display trend and reversal filter
+st.subheader("⚠️ Potential Trend Reversals")
+
+threshold = st.slider("Set minimum reversal probability %", 50, 100, 70)
+high_reversal = rankings[rankings["Reversal_Probability (%)"] >= threshold]
+
+if high_reversal.empty:
+    st.info("No stocks above selected reversal probability.")
+else:
+    st.dataframe(
+        high_reversal[
+            ["Stock", "Trend_Direction", "Reversal_Probability (%)"]
+        ].sort_values("Reversal_Probability (%)", ascending=False).reset_index(drop=True)
+    )
+
+# Button to log to Google Sheets
 if st.button("📝 Log Results to Google Sheets"):
     try:
         log_to_sheet(rankings, timeframe)
