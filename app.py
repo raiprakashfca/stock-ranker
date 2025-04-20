@@ -160,7 +160,10 @@ try:
     tf_part = sort_column.split("(")[-1].replace(")", "").strip()
     label_part = sort_column.split("(")[0].strip()
     sort_col_index = (tf_part, label_part)
-    display_df = display_df.sort_values(by=sort_col_index, ascending=sort_asc).head(limit)
+        if sort_col_index in display_df.columns:
+        display_df = display_df.sort_values(by=sort_col_index, ascending=sort_asc).head(limit)
+    else:
+        st.warning(f"⚠️ Column {sort_column} not found. Sorting skipped.")
 except KeyError:
     st.warning(f"⚠️ Column {sort_column} not found in data. Sorting skipped.")
 
