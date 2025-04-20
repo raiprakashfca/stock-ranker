@@ -13,46 +13,45 @@ from utils.sheet_logger import log_to_google_sheets
 st.set_page_config(page_title="📊 Stock Ranker Dashboard", layout="wide")
 st.title("📊 Multi-Timeframe Stock Ranking Dashboard")
 
-# 🔐 Force sidebar to appear
-st.sidebar.title("⚙️ Settings")
-st.sidebar.info("Zerodha login and token management panel")
+# 🧱 Always-visible sidebar section
+st.sidebar.title("⚙️ API Login & Configuration")
+st.sidebar.markdown("➡️ Expand this panel to login to Zerodha if token has expired.")
 
-# 🔐 Always-visible sidebar token handler
+# 🔐 Zerodha API Access Management
 with st.sidebar.expander("🔐 Zerodha Access Token", expanded=False):
     st.markdown("This panel lets you manage Zerodha API tokens manually if needed.")
 
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     try:
         creds_dict = json.loads(st.secrets["gspread_service_account"])
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+        client = gspread.authorize(creds)
+        sheet = client.open("ZerodhaTokenStore").sheet1
+        tokens = sheet.get_all_values()[0]  # A1 = API Key, B1 = Secret, C1 = Access Token
+
+        api_key = tokens[0]
+        api_secret = tokens[1]
+        access_token = tokens[2]
+
+        st.markdown(f"[🔁 Click here to login to Zerodha](https://kite.zerodha.com/connect/login?v=3&api_key={api_key})")
+        request_token = st.text_input("🔑 Paste new Request Token", key="manual_token")
+
+        if request_token:
+            try:
+                kite = KiteConnect(api_key=api_key)
+                session_data = kite.generate_session(request_token, api_secret=api_secret)
+                sheet.update_cell(1, 3, session_data["access_token"])
+                st.success("✅ Access token updated successfully. Please refresh the app.")
+                st.stop()
+            except Exception as e:
+                st.error("❌ Failed to update token. Please try again.")
+                st.exception(e)
     except Exception as e:
-        st.sidebar.error("❌ Failed to load Google service account secrets.")
-        st.sidebar.exception(e)
+        st.error("❌ Failed to load Google Sheet or credentials.")
+        st.exception(e)
         st.stop()
 
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    client = gspread.authorize(creds)
-    sheet = client.open("ZerodhaTokenStore").sheet1
-    tokens = sheet.get_all_values()[0]  # A1 = API Key, B1 = Secret, C1 = Access Token
-
-    api_key = tokens[0]
-    api_secret = tokens[1]
-    access_token = tokens[2]
-
-    st.markdown(f"[🔁 Click here to login to Zerodha](https://kite.zerodha.com/connect/login?v=3&api_key={api_key})")
-    request_token = st.text_input("🔑 Paste new Request Token", key="manual_token")
-
-    if request_token:
-        try:
-            kite = KiteConnect(api_key=api_key)
-            session_data = kite.generate_session(request_token, api_secret=api_secret)
-            sheet.update_cell(1, 3, session_data["access_token"])
-            st.success("✅ Access token updated successfully.")
-            st.stop()
-        except Exception as e:
-            st.error("❌ Failed to update token. Please try again.")
-            st.exception(e)
-
-# 🧠 Setup connection to Kite API
+# ✅ API setup moved below the sidebar logic
 kite = KiteConnect(api_key=tokens[0])
 try:
     kite.set_access_token(tokens[2])
