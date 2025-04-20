@@ -4,6 +4,11 @@ from kiteconnect import KiteConnect
 import gspread
 import json
 from oauth2client.service_account import ServiceAccountCredentials
+from io import BytesIO
+
+from utils.zerodha import get_stock_data
+from utils.indicators import calculate_scores
+from utils.sheet_logger import log_to_google_sheets
 
 st.set_page_config(page_title="📊 Stock Ranker Dashboard", layout="wide")
 st.title("📊 Multi-Timeframe Stock Ranking Dashboard")
@@ -45,11 +50,45 @@ except Exception as e:
     st.error("⚠️ Access token invalid or expired. Use the sidebar to generate a new one.")
     st.stop()
 
-# ✅ Placeholder to show where we’ll build live logic
-st.success("✅ Kite API initialized. Ready to fetch and rank stocks!")
+# ⚙️ Configuration
+TIMEFRAMES = {
+    "15m": {"interval": "15minute", "days": 5},
+    "1h": {"interval": "60minute", "days": 15},
+    "1d": {"interval": "day", "days": 90},
+}
+SYMBOLS = ["RELIANCE", "TCS", "INFY", "ICICIBANK", "HDFCBANK", "SBIN", "BHARTIARTL"]
 
-# 💡 Next steps (future code to be added here)
-# - Fetch OHLCV for heavyweights (RELIANCE, TCS, etc.)
-# - Run technical indicators and calculate scores
-# - Visualize scores in multi-timeframe layout
-# - Excel export + Google Sheet sync
+# 📊 Fetch & Analyze
+all_data = []
+with st.spinner("🔄 Fetching and scoring data..."):
+    for symbol in SYMBOLS:
+        row = {"Symbol": symbol}
+        for label, config in TIMEFRAMES.items():
+            df = get_stock_data(kite, symbol, config["interval"], config["days"])
+            if df.empty:
+                st.warning(f"⚠️ No data for {symbol} [{label}]")
+                continue
+            try:
+                result = calculate_scores(df)
+                for key, value in result.items():
+                    row[f"{key} ({label})"] = value
+            except Exception as e:
+                st.warning(f"⚠️ Failed scoring {symbol} [{label}]: {e}")
+        all_data.append(row)
+
+# 🪄 Compile & Display
+if all_data:
+    df = pd.DataFrame(all_data)
+    st.dataframe(df, use_container_width=True)
+
+    # 💾 Export
+    excel_buffer = BytesIO()
+    df.to_excel(excel_buffer, index=False)
+    st.download_button("📥 Download Excel", data=excel_buffer.getvalue(), file_name="stock_rankings.xlsx")
+
+    # 📤 Sheet sync
+    try:
+        log_to_google_sheets("Combined", df)
+        st.success("✅ Logged to Google Sheet")
+    except Exception as e:
+        st.warning(f"⚠️ Sheet
