@@ -11,6 +11,9 @@ def log_to_google_sheets(sheet_name, df):
             st.warning("🛑 Sheet log failed: Provided data is not a DataFrame")
             return
 
+        # Round all numerical data to 2 decimal places
+        df = df.round(2)
+
         creds_dict = st.secrets["gspread_service_account"]
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
