@@ -135,8 +135,12 @@ th[colspan="3"] {
 """, unsafe_allow_html=True)
 
 st.markdown("### 🧠 Ranked Score Table")
-with st.expander("📊 Expand Ranked Scores", expanded=True):
-    st.dataframe(df, use_container_width=True, hide_index=False)
+df_primary = df[[col for col in df.columns if col[1] in ['TMV Score', 'Trend Direction', 'Reversal Probability']]]
+st.dataframe(df_primary, use_container_width=True, hide_index=False)
+
+with st.expander("📊 Show Detailed Trend/Momentum/Volume Scores"):
+    df_detailed = df[[col for col in df.columns if col[1] in ['Trend Score', 'Momentum Score', 'Volume Score']]]
+    st.dataframe(df_detailed, use_container_width=True, hide_index=False)
 
 # Save to Excel
 excel_buffer = BytesIO()
