@@ -73,24 +73,23 @@ kite = KiteConnect(api_key=tokens[0])
 try:
     kite.set_access_token(tokens[2])
 except Exception as e:
-    if any(keyword in str(e) for keyword in ["Incorrect api_key", "TokenException", "TokenExpired", "Invalid session"]):
-        st.sidebar.error("🔐 Access token expired or invalid.")
-        api_key = tokens[0]
-        st.sidebar.markdown(f"[🔁 Click here to login and generate new token](https://kite.zerodha.com/connect/login?v=3&api_key={api_key})")
-        request_token = st.sidebar.text_input("🔑 Paste the new Request Token here", key="new_token")
-        if request_token:
-            try:
-                data = kite.generate_session(request_token, api_secret=tokens[1])
-                access_token = data["access_token"]
-                sheet.update_cell(1, 3, access_token)
-                st.sidebar.success("✅ Access token updated successfully. Please rerun the app.")
-                st.stop()
-            except Exception as ex:
-                st.sidebar.error("❌ Failed to generate access token. Please check the request token and try again.")
-                st.sidebar.exception(ex)
-        st.stop()
-    else:
-        raise e
+    st.warning("⚠️ Token issue detected. You may reauthenticate manually using the sidebar.")
+
+with st.sidebar.expander("🔐 Zerodha Access Token", expanded=False):
+    api_key = tokens[0]
+    api_secret = tokens[1]
+    st.markdown(f"[🔁 Click here to login and generate new token](https://kite.zerodha.com/connect/login?v=3&api_key={api_key})")
+    request_token = st.text_input("🔑 Paste the new Request Token here", key="new_token_manual")
+    if request_token:
+        try:
+            data = kite.generate_session(request_token, api_secret=api_secret)
+            access_token = data["access_token"]
+            sheet.update_cell(1, 3, access_token)
+            st.success("✅ Access token updated successfully. Please rerun the app.")
+            st.stop()
+        except Exception as ex:
+            st.error("❌ Failed to generate access token. Please check the request token and try again.")
+            st.exception(ex)
 
 TIMEFRAMES = {
     "15m": {"interval": "15minute", "days": 5},
