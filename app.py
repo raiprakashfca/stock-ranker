@@ -74,13 +74,36 @@ except Exception:
     st.error("⚠️ Access token invalid. Use sidebar to update it.")
     st.stop()
 
+# Read LTPs from Google Sheet
+try:
+    ltp_sheet = client.open("Stock Rankings").worksheet("LiveLTPs")
+    ltp_data = ltp_sheet.get_all_records()
+    ltp_df = pd.DataFrame(ltp_data)
+except Exception as e:
+    st.warning("⚠️ Could not fetch live LTPs: {e}")
+    ltp_df = pd.DataFrame()
+
+# Display LTPs
+if not ltp_df.empty:
+    st.markdown("### 💹 Live LTPs")
+    st.dataframe(ltp_df, use_container_width=True, hide_index=True)
+
 # Configuration
 TIMEFRAMES = {
     "15m": {"interval": "15minute", "days": 5},
     "1h": {"interval": "60minute", "days": 15},
     "1d": {"interval": "day", "days": 90},
 }
-SYMBOLS = ["RELIANCE", "TCS", "INFY", "ICICIBANK", "HDFCBANK", "SBIN", "BHARTIARTL"]
+SYMBOLS = [
+    "ADANIENT", "ADANIPORTS", "APOLLOHOSP", "ASIANPAINT", "AXISBANK", "BAJAJ-AUTO",
+    "BAJFINANCE", "BAJAJFINSV", "BPCL", "BHARTIARTL", "BRITANNIA", "CIPLA",
+    "COALINDIA", "DIVISLAB", "DRREDDY", "EICHERMOT", "GRASIM", "HCLTECH",
+    "HDFCBANK", "HDFCLIFE", "HEROMOTOCO", "HINDALCO", "HINDUNILVR", "ICICIBANK",
+    "ITC", "INDUSINDBK", "INFY", "JSWSTEEL", "KOTAKBANK", "LT", "M&M", "MARUTI",
+    "NTPC", "NESTLEIND", "ONGC", "POWERGRID", "RELIANCE", "SBILIFE", "SBIN",
+    "SUNPHARMA", "TCS", "TATACONSUM", "TATAMOTORS", "TATASTEEL", "TECHM",
+    "TITAN", "UPL", "ULTRACEMCO", "WIPRO"
+]
 
 # Data extraction
 all_data = []
