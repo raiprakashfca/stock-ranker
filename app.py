@@ -5,11 +5,8 @@ import gspread
 import json
 from oauth2client.service_account import ServiceAccountCredentials
 from io import BytesIO
-
 from utils.zerodha import get_stock_data
 from utils.indicators import calculate_scores
-
-# Updated log_to_google_sheets with validation
 from utils.sheet_logger import log_to_google_sheets
 
 def log_to_google_sheets(sheet_name, df):
@@ -74,20 +71,6 @@ except Exception:
     st.error("⚠️ Access token invalid. Use sidebar to update it.")
     st.stop()
 
-# Read LTPs from Google Sheet
-try:
-    ltp_sheet = client.open("Stock Rankings").worksheet("LiveLTPs")
-    ltp_data = ltp_sheet.get_all_records()
-    ltp_df = pd.DataFrame(ltp_data)
-except Exception as e:
-    st.warning("⚠️ Could not fetch live LTPs: {e}")
-    ltp_df = pd.DataFrame()
-
-# Display LTPs
-if not ltp_df.empty:
-    st.markdown("### 💹 Live LTPs")
-    st.dataframe(ltp_df, use_container_width=True, hide_index=True)
-
 # Configuration
 TIMEFRAMES = {
     "15m": {"interval": "15minute", "days": 5},
@@ -140,6 +123,31 @@ for col in df.columns:
 df.columns = pd.MultiIndex.from_tuples(columns)
 df = df.set_index(("Meta", "Symbol"))
 
+# Highlighting rows based on conditions
+def highlight_rows(row):
+    if (
+        row["15m | Trend Direction"] == "Bullish" and
+        row["1h | Trend Direction"] == "Bullish" and
+        row["1d | Trend Direction"] == "Bullish" and
+        row["TMV Score (15m)"] >= 0.8 and
+        row["TMV Score (1h)"] >= 0.8 and
+        row["TMV Score (1d)"] >= 0.8
+    ):
+        return ["background-color: #28a745"] * len(row)
+    elif (
+        row["15m | Trend Direction"] == "Bearish" and
+        row["1h | Trend Direction"] == "Bearish" and
+        row["1d | Trend Direction"] == "Bearish" and
+        row["TMV Score (15m)"] >= 0.8 and
+        row["TMV Score (1h)"] >= 0.8 and
+        row["TMV Score (1d)"] >= 0.8
+    ):
+        return ["background-color: #dc3545"] * len(row)
+    else:
+        return [""] * len(row)
+
+styled_df = df.style.apply(highlight_rows, axis=1)
+
 # Display improvements
 st.markdown("""
 <style>
@@ -159,7 +167,7 @@ th[colspan="3"] {
 
 st.markdown("### 🧠 Ranked Score Table")
 df_primary = df[[col for col in df.columns if col[1] in ['TMV Score', 'Trend Direction', 'Reversal Probability']]]
-st.dataframe(df_primary, use_container_width=True, hide_index=False)
+st.dataframe(styled_df, use_container_width=True, hide_index=False)
 
 with st.expander("📊 Show Detailed Trend/Momentum/Volume Scores"):
     df_detailed = df[[col for col in df.columns if col[1] in ['Trend Score', 'Momentum Score', 'Volume Score']]]
