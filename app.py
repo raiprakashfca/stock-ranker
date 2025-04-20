@@ -10,15 +10,15 @@ from utils.zerodha import get_stock_data
 from utils.indicators import calculate_scores
 from utils.sheet_logger import log_to_google_sheets
 
-st.set_page_config(page_title="📊 Stock Ranker Dashboard", layout="wide")
+st.set_page_config(page_title="📊 Stock Ranker Dashboard", layout="wide", initial_sidebar_state="expanded")
 st.title("📊 Multi-Timeframe Stock Ranking Dashboard")
 
 # 🧱 Always-visible sidebar section
 st.sidebar.title("⚙️ API Login & Configuration")
-st.sidebar.markdown("➡️ Expand this panel to login to Zerodha if token has expired.")
+st.sidebar.markdown("➡️ Use the panel below to login to Zerodha or update expired tokens.")
 
 # 🔐 Zerodha API Access Management
-with st.sidebar.expander("🔐 Zerodha Access Token", expanded=False):
+with st.sidebar.expander("🔐 Zerodha Access Token", expanded=True):
     st.markdown("This panel lets you manage Zerodha API tokens manually if needed.")
 
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
