@@ -83,7 +83,7 @@ if not all_data:
     st.stop()
 
 # DataFrame setup
-df = pd.DataFrame(all_data)
+df = pd.DataFrame(all_data).round(2)
 columns = []
 for col in df.columns:
     if col == "Symbol":
@@ -118,7 +118,7 @@ st.dataframe(df, use_container_width=True, hide_index=False)
 
 # Save to Excel
 excel_buffer = BytesIO()
-flat_df = df.reset_index()
+flat_df = df.reset_index().round(2)
 flat_df.columns = [' '.join(col).strip() if isinstance(col, tuple) else col for col in flat_df.columns]
 flat_df.to_excel(excel_buffer, index=False)
 st.download_button("📥 Download Excel", data=excel_buffer.getvalue(), file_name="stock_rankings.xlsx")
