@@ -78,6 +78,11 @@ def fetch_ltp_sheet():
 
 ltp_data = fetch_ltp_sheet()
 
+# Auto refresh every 1 minute
+st.experimental_set_query_params(refresh=str(time.time()))
+st_autorefresh = st.experimental_rerun if st.button("🔄 Refresh Now") else None
+st_autorefresh = st_autorefresh or st.experimental_singleton(lambda: time.sleep(60))
+
 # Data extraction
 all_data = []
 with st.spinner("🔄 Fetching and scoring data..."):
@@ -139,7 +144,7 @@ st.download_button("📥 Download Excel", data=excel_buffer.getvalue(), file_nam
 # Sync to Sheet
 try:
     if isinstance(flat_df, pd.DataFrame):
-        log_to_google_sheets("Combined", flat_df)
+        log_to_google_sheets("Stock Rankings", flat_df)
     else:
         st.warning("⚠️ Skipped Google Sheet log: flat_df is not a valid DataFrame")
 except Exception as e:
