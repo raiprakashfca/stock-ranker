@@ -1,23 +1,16 @@
-
 import json
 import pandas as pd
 import streamlit as st
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from io import BytesIO
-from utils.zerodha import get_kite, get_stock_data
-from utils.indicators import calculate_scores
-from utils.sheet_logger import log_to_google_sheets
 
-st.set_page_config(page_title="📊 Multi-Timeframe Stock Ranking Dashboard", layout="wide")
+# Set page config
+st.set_page_config(page_title="📊 Fast Stock Rankings", layout="wide")
 
-st.markdown("### 📡 Auto-refreshing every minute...")
-st.experimental_set_query_params()  # Ensures refresh logic is applied
-st_autorefresh = st.experimental_rerun
-
+# Custom CSS
 st.markdown("""
 <style>
-th, td { border-right: 1px solid #ddd; }
 .score-badge {
     display: inline-block;
     padding: 4px 10px;
@@ -44,103 +37,81 @@ th:first-child, td:first-child {
 </style>
 """, unsafe_allow_html=True)
 
-st.title("📊 Multi-Timeframe Stock Ranking Dashboard")
+st.title("🚀 Fast Stock Rankings (Powered by Background Engine)")
 
-# Load Google Sheet credentials
+# Auto-refresh every 5 minutes
+st.experimental_rerun = st.query_params.get("refresh", False)
+st.experimental_set_query_params(refresh=True)
+
+# Google Sheets auth
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds_dict = json.loads(st.secrets["gspread_service_account"])
 creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
 client = gspread.authorize(creds)
 
-# Read live LTPs
-ltp_sheet = client.open("LiveLTPStore").sheet1
-ltp_data = pd.DataFrame(ltp_sheet.get_all_records())
+# Read from BackgroundAnalysisStore
+sheet = client.open("BackgroundAnalysisStore").sheet1
+data = pd.DataFrame(sheet.get_all_records())
 
-# Read Zerodha credentials
-token_sheet = client.open("ZerodhaTokenStore").sheet1
-tokens = token_sheet.get_all_values()[0]
-api_key, api_secret, access_token = tokens[0], tokens[1], tokens[2]
-
-# Initialize Kite
-kite = get_kite(api_key, access_token)
-
-TIMEFRAMES = {
-    "15m": {"interval": "15minute", "days": 5},
-    "1h": {"interval": "60minute", "days": 15},
-    "1d": {"interval": "day", "days": 90},
-}
-
-symbols = [s for s in ltp_data["Symbol"].dropna().unique() if s and s != "HDFC"]
-all_data = []
-
-with st.spinner("🔍 Analyzing all timeframes..."):
-    for symbol in symbols:
-        row = {"Symbol": symbol}
-        live_row = ltp_data[ltp_data["Symbol"] == symbol]
-        if not live_row.empty:
-            row["LTP"] = float(live_row.iloc[0]["LTP"])
-        try:
-            df_daily = get_stock_data(kite, symbol, "day", 2)
-            if len(df_daily) >= 2:
-                row["Prev Close"] = df_daily.iloc[-2]["close"]
-                row["% Change"] = ((row["LTP"] - row["Prev Close"]) / row["Prev Close"]) * 100
-        except:
-            row["% Change"] = None
-
-        for label, config in TIMEFRAMES.items():
-            df = get_stock_data(kite, symbol, config["interval"], config["days"])
-            if not df.empty:
-                try:
-                    result = calculate_scores(df)
-                    for key, value in result.items():
-                        adjusted_key = "TMV Score" if key == "Total Score" else key
-                        row[f"{label} | {adjusted_key}"] = value
-                except Exception as e:
-                    st.warning(f"⚠️ {symbol} ({label}) failed: {e}")
-        all_data.append(row)
-
-if not all_data:
-    st.error("❌ No stock data available.")
+if data.empty:
+    st.warning("⚠️ No data available in BackgroundAnalysisStore.")
     st.stop()
 
-final_df = pd.DataFrame(all_data)
-final_df["% Change"] = final_df["% Change"].apply(lambda x: f"{x:.2f}%" if pd.notna(x) else "N/A")
+# Format % Change
+data["% Change"] = data["% Change"].apply(lambda x: f"{float(x):+.2f}%" if isinstance(x, (float, int)) else x)
 
-# Display filtered and sorted
-sort_column = st.selectbox("Sort by", [col for col in final_df.columns if "Score" in col or "Reversal" in col])
-sort_asc = st.radio("Order", ["Descending", "Ascending"]) == "Ascending"
-limit = st.slider("Top N Symbols", 1, len(final_df), 10)
+# Render badges
+def render_score(score):
+    try:
+        score = float(score)
+        if score >= 0.75:
+            return f"<span class='score-badge high'>🟢 {score:.2f}</span>"
+        elif score >= 0.4:
+            return f"<span class='score-badge medium'>🟡 {score:.2f}</span>"
+        else:
+            return f"<span class='score-badge low'>🔴 {score:.2f}</span>"
+    except:
+        return score
 
-final_df = final_df.sort_values(by=sort_column, ascending=sort_asc).head(limit)
-
-# Highlight logic
-highlight_conditions = (
-    (final_df[["15m | Trend Direction", "1h | Trend Direction", "1d | Trend Direction"]] == "Bullish").all(axis=1) &
-    (final_df[["15m | TMV Score", "1h | TMV Score", "1d | TMV Score"]] >= 0.8).all(axis=1)
-)
-highlight_red = (
-    (final_df[["15m | Trend Direction", "1h | Trend Direction", "1d | Trend Direction"]] == "Bearish").all(axis=1) &
-    (final_df[["15m | TMV Score", "1h | TMV Score", "1d | TMV Score"]] >= 0.8).all(axis=1)
-)
-
-def highlight_row(row):
-    if highlight_conditions.loc[row.name]:
-        return ["background-color: #d4edda"] * len(row)
-    elif highlight_red.loc[row.name]:
-        return ["background-color: #f8d7da"] * len(row)
+def render_direction(direction):
+    if direction == "Bullish":
+        return "<span class='direction bullish'>🟢 Bullish</span>"
+    elif direction == "Bearish":
+        return "<span class='direction bearish'>🔴 Bearish</span>"
+    elif direction == "Neutral":
+        return "<span class='direction neutral'>🟡 Neutral</span>"
     else:
-        return [""] * len(row)
+        return direction
 
-styled_df = final_df.style.apply(highlight_row, axis=1)
-st.dataframe(styled_df, use_container_width=True, hide_index=False)
+def render_reversal(prob):
+    try:
+        prob = float(prob)
+        if prob >= 0.7:
+            return f"🔄 {prob:.2f}"
+        elif prob >= 0.4:
+            return f"➖ {prob:.2f}"
+        else:
+            return f"✅ {prob:.2f}"
+    except:
+        return prob
 
-# Export to Excel
+# Format selected columns
+format_dict = {}
+for col in data.columns:
+    if "Score" in col:
+        format_dict[col] = render_score
+    elif "Direction" in col:
+        format_dict[col] = render_direction
+    elif "Reversal" in col:
+        format_dict[col] = render_reversal
+
+styled_df = data.style.format(format_dict, escape="html")
+
+# Display
+st.markdown("### 📈 Latest Ranked Data (from background engine)")
+st.markdown('<div style="overflow-x:auto;">' + styled_df.to_html(escape=False) + '</div>', unsafe_allow_html=True)
+
+# Export
 excel_buffer = BytesIO()
-final_df.to_excel(excel_buffer, index=False)
-st.download_button("📥 Download Excel", data=excel_buffer.getvalue(), file_name="stock_rankings.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-try:
-    log_to_google_sheets(sheet_name="Combined", df=final_df)
-    st.success("✅ Data saved to Google Sheet.")
-except Exception as e:
-    st.warning(f"⚠️ Could not update Google Sheet: {e}")
+data.to_excel(excel_buffer, index=False)
+st.download_button("📥 Download Excel", data=excel_buffer.getvalue(), file_name="fast_stock_rankings.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
