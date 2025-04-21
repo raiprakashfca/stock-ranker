@@ -1,3 +1,4 @@
+
 import json
 import pandas as pd
 import streamlit as st
@@ -10,8 +11,9 @@ from utils.sheet_logger import log_to_google_sheets
 
 st.set_page_config(page_title="📊 Multi-Timeframe Stock Ranking Dashboard", layout="wide")
 
-# Auto refresh every minute
-st.markdown('<meta http-equiv="refresh" content="60">', unsafe_allow_html=True)
+st.markdown("### 📡 Auto-refreshing every minute...")
+st.experimental_set_query_params()  # Ensures refresh logic is applied
+st_autorefresh = st.experimental_rerun
 
 st.markdown("""
 <style>
@@ -44,7 +46,7 @@ th:first-child, td:first-child {
 
 st.title("📊 Multi-Timeframe Stock Ranking Dashboard")
 
-# Load credentials
+# Load Google Sheet credentials
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds_dict = json.loads(st.secrets["gspread_service_account"])
 creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
@@ -68,7 +70,7 @@ TIMEFRAMES = {
     "1d": {"interval": "day", "days": 90},
 }
 
-symbols = ltp_data["Symbol"].tolist()
+symbols = [s for s in ltp_data["Symbol"].dropna().unique() if s and s != "HDFC"]
 all_data = []
 
 with st.spinner("🔍 Analyzing all timeframes..."):
@@ -77,13 +79,19 @@ with st.spinner("🔍 Analyzing all timeframes..."):
         live_row = ltp_data[ltp_data["Symbol"] == symbol]
         if not live_row.empty:
             row["LTP"] = float(live_row.iloc[0]["LTP"])
+        try:
+            df_daily = get_stock_data(kite, symbol, "day", 2)
+            if len(df_daily) >= 2:
+                row["Prev Close"] = df_daily.iloc[-2]["close"]
+                row["% Change"] = ((row["LTP"] - row["Prev Close"]) / row["Prev Close"]) * 100
+        except:
+            row["% Change"] = None
+
         for label, config in TIMEFRAMES.items():
             df = get_stock_data(kite, symbol, config["interval"], config["days"])
             if not df.empty:
                 try:
                     result = calculate_scores(df)
-                    if label == "1d":
-                        row["Close (Prev Day)"] = float(df.iloc[-2]["close"])
                     for key, value in result.items():
                         adjusted_key = "TMV Score" if key == "Total Score" else key
                         row[f"{label} | {adjusted_key}"] = value
@@ -96,11 +104,7 @@ if not all_data:
     st.stop()
 
 final_df = pd.DataFrame(all_data)
-
-# % Change from yesterday's close
-final_df["% Change"] = final_df.apply(
-    lambda row: f"{((row['LTP'] - row['Close (Prev Day)']) / row['Close (Prev Day)'] * 100):.2f}%" if row["Close (Prev Day)"] else "N/A", axis=1
-)
+final_df["% Change"] = final_df["% Change"].apply(lambda x: f"{x:.2f}%" if pd.notna(x) else "N/A")
 
 # Display filtered and sorted
 sort_column = st.selectbox("Sort by", [col for col in final_df.columns if "Score" in col or "Reversal" in col])
