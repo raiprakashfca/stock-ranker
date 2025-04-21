@@ -1,60 +1,83 @@
-import time
 import json
+import time
+from kiteconnect import KiteConnect, KiteTicker
 import gspread
-from kiteconnect import KiteConnect
 from oauth2client.service_account import ServiceAccountCredentials
 
-# Setup: Google Sheets Credentials
+# === CONFIGURATION ===
+LTP_SHEET_NAME = "LiveLTPStore"
+SYMBOLS = [
+    "RELIANCE", "INFY", "TCS", "ICICIBANK", "HDFCBANK",
+    "SBIN", "BHARTIARTL", "AXISBANK", "LT", "ITC",
+    "KOTAKBANK", "HCLTECH", "WIPRO", "TECHM", "ADANIENT",
+    "ADANIPORTS", "BAJAJFINSV", "BAJFINANCE", "TITAN", "POWERGRID",
+    "COALINDIA", "NTPC", "JSWSTEEL", "ULTRACEMCO", "TATAMOTORS",
+    "TATASTEEL", "BPCL", "ONGC", "DIVISLAB", "SUNPHARMA",
+    "HINDALCO", "NESTLEIND", "ASIANPAINT", "CIPLA", "SBILIFE",
+    "HDFCLIFE", "GRASIM", "HEROMOTOCO", "EICHERMOT", "BRITANNIA",
+    "UPL", "APOLLOHOSP", "BAJAJ-AUTO", "INDUSINDBK", "DRREDDY",
+    "MARUTI", "M&M", "HINDUNILVR", "TATACONSUM", "ICICIPRULI"
+]
+
+# === STEP 1: Load API and Sheet Credentials ===
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 with open("zerodhatokensaver-1b53153ffd25.json") as f:
     creds_dict = json.load(f)
 creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
 client = gspread.authorize(creds)
+sheet = client.open(LTP_SHEET_NAME).sheet1
 
-# Setup: Zerodha Tokens
-token_sheet = client.open("ZerodhaTokenStore").sheet1
-tokens = token_sheet.get_all_values()[0]
-kite = KiteConnect(api_key=tokens[0])
-kite.set_access_token(tokens[2])
+tokens = client.open("ZerodhaTokenStore").sheet1.get_all_values()[0]
+api_key, api_secret, access_token = tokens[0], tokens[1], tokens[2]
 
-# Stocks to monitor (NIFTY 50)
-symbols = [
-    "RELIANCE", "INFY", "TCS", "ICICIBANK", "HDFCBANK", "SBIN", "BHARTIARTL", "LT",
-    "AXISBANK", "KOTAKBANK", "ITC", "ASIANPAINT", "HCLTECH", "WIPRO", "TECHM", "SUNPHARMA",
-    "DIVISLAB", "DRREDDY", "TITAN", "NESTLEIND", "ULTRACEMCO", "TATASTEEL", "JSWSTEEL",
-    "COALINDIA", "ONGC", "HINDALCO", "GRASIM", "UPL", "POWERGRID", "NTPC", "BPCL", "IOC",
-    "INDUSINDBK", "HDFCLIFE", "SBILIFE", "APOLLOHOSP", "ADANIPORTS", "ADANIENT",
-    "HEROMOTOCO", "BAJAJ-AUTO", "EICHERMOT", "M&M", "MARUTI", "BRITANNIA", "CIPLA",
-    "TATACONSUM"
-]
+kite = KiteConnect(api_key=api_key)
+kite.set_access_token(access_token)
 
-# Utility: Get instrument tokens
-nse_instruments = kite.instruments("NSE")
+# === STEP 2: Get Instrument Tokens for Desired Stocks ===
+print("Fetching instrument tokens...")
+instruments = kite.instruments("NSE")
 symbol_map = {}
-for inst in nse_instruments:
-    if inst["tradingsymbol"] in symbols and inst["segment"] == "NSE":
-        symbol_map[inst["tradingsymbol"]] = inst["instrument_token"]
+for item in instruments:
+    if item["tradingsymbol"] in SYMBOLS and item["segment"] == "NSE":
+        symbol_map[item["instrument_token"]] = item["tradingsymbol"]
 
-# Loop to fetch and log
-while True:
-    try:
-        quote_data = kite.ltp([f"NSE:{s}" for s in symbols])
-        data = []
-        for s in symbols:
-            ltp = quote_data[f"NSE:{s}"]["last_price"]
-            prev_close = quote_data[f"NSE:{s}"]["ohlc"]["close"]
-            pct_change = round(((ltp - prev_close) / prev_close) * 100, 2)
-            data.append([s, round(ltp, 2), pct_change])
+print(f"Tracking {len(symbol_map)} symbols...")
 
-        # Push to Sheet
-        sheet = client.open("LiveLTPStore").sheet1
-        sheet.clear()
-        sheet.append_row(["Symbol", "LTP", "% Change"])
-        sheet.append_rows(data)
+# === STEP 3: Set up KiteTicker ===
+kws = KiteTicker(api_key, access_token)
 
-        print("✅ LTP Data logged.")
-        time.sleep(60)
+# === STEP 4: Live Tick Callback ===
+def on_ticks(ws, ticks):
+    data = []
+    for tick in ticks:
+        instrument_token = tick["instrument_token"]
+        ltp = tick.get("last_price")
+        symbol = symbol_map.get(instrument_token, "Unknown")
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        data.append([timestamp, symbol, ltp])
 
-    except Exception as e:
-        print("❌ Error:", e)
-        time.sleep(60)
+    if data:
+        try:
+            sheet.clear()
+            sheet.append_rows([["Timestamp", "Symbol", "LTP"]] + data)
+            print(f"Logged {len(data)} LTPs at {timestamp}")
+        except Exception as e:
+            print(f"Error updating sheet: {e}")
+
+def on_connect(ws, response):
+    print("Connected to KiteTicker WebSocket!")
+    ws.subscribe(list(symbol_map.keys()))
+
+def on_close(ws, code, reason):
+    print("WebSocket closed", code, reason)
+
+def on_error(ws, code, reason):
+    print("WebSocket error", code, reason)
+
+kws.on_ticks = on_ticks
+kws.on_connect = on_connect
+kws.on_close = on_close
+kws.on_error = on_error
+
+print("Starting WebSocket stream...")
+kws.connect(threaded=False)
