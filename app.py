@@ -1,4 +1,3 @@
-
 import json
 import pandas as pd
 import streamlit as st
@@ -10,10 +9,7 @@ from utils.indicators import calculate_scores
 from utils.sheet_logger import log_to_google_sheets
 
 st.set_page_config(page_title="📊 Multi-Timeframe Stock Ranking Dashboard", layout="wide")
-
-st.markdown("### 📡 Auto-refreshing every minute...")
-st.experimental_set_query_params()  # Ensures refresh logic is applied
-st_autorefresh = st.experimental_rerun
+st.markdown('<meta http-equiv="refresh" content="60">', unsafe_allow_html=True)
 
 st.markdown("""
 <style>
@@ -70,7 +66,7 @@ TIMEFRAMES = {
     "1d": {"interval": "day", "days": 90},
 }
 
-symbols = [s for s in ltp_data["Symbol"].dropna().unique() if s and s != "HDFC"]
+symbols = [s for s in ltp_data["Symbol"].tolist() if s != "HDFC"]
 all_data = []
 
 with st.spinner("🔍 Analyzing all timeframes..."):
@@ -79,14 +75,6 @@ with st.spinner("🔍 Analyzing all timeframes..."):
         live_row = ltp_data[ltp_data["Symbol"] == symbol]
         if not live_row.empty:
             row["LTP"] = float(live_row.iloc[0]["LTP"])
-        try:
-            df_daily = get_stock_data(kite, symbol, "day", 2)
-            if len(df_daily) >= 2:
-                row["Prev Close"] = df_daily.iloc[-2]["close"]
-                row["% Change"] = ((row["LTP"] - row["Prev Close"]) / row["Prev Close"]) * 100
-        except:
-            row["% Change"] = None
-
         for label, config in TIMEFRAMES.items():
             df = get_stock_data(kite, symbol, config["interval"], config["days"])
             if not df.empty:
@@ -95,6 +83,12 @@ with st.spinner("🔍 Analyzing all timeframes..."):
                     for key, value in result.items():
                         adjusted_key = "TMV Score" if key == "Total Score" else key
                         row[f"{label} | {adjusted_key}"] = value
+                    if label == "1d":
+                        prev_close = df.iloc[-2]["close"] if len(df) > 1 else None
+                        if prev_close:
+                            row["% Change"] = f"{((row['LTP'] - prev_close)/prev_close) * 100:.2f}%"
+                        else:
+                            row["% Change"] = "NA"
                 except Exception as e:
                     st.warning(f"⚠️ {symbol} ({label}) failed: {e}")
         all_data.append(row)
@@ -104,10 +98,9 @@ if not all_data:
     st.stop()
 
 final_df = pd.DataFrame(all_data)
-final_df["% Change"] = final_df["% Change"].apply(lambda x: f"{x:.2f}%" if pd.notna(x) else "N/A")
 
 # Display filtered and sorted
-sort_column = st.selectbox("Sort by", [col for col in final_df.columns if "Score" in col or "Reversal" in col])
+sort_column = st.selectbox("Sort by", [col for col in final_df.columns if "Score" in col or "Reversal" in col or col == "% Change"])
 sort_asc = st.radio("Order", ["Descending", "Ascending"]) == "Ascending"
 limit = st.slider("Top N Symbols", 1, len(final_df), 10)
 
