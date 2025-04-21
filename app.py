@@ -79,7 +79,6 @@ def fetch_ltp_sheet():
 ltp_data = fetch_ltp_sheet()
 
 # Auto refresh every 1 minute
-st.experimental_set_query_params(refresh=str(time.time()))
 st_autorefresh = st.experimental_rerun if st.button("🔄 Refresh Now") else None
 st_autorefresh = st_autorefresh or st.experimental_singleton(lambda: time.sleep(60))
 
@@ -139,7 +138,7 @@ excel_buffer = BytesIO()
 flat_df = df.reset_index().round(2)
 flat_df.columns = [' '.join(col).strip() if isinstance(col, tuple) else col for col in flat_df.columns]
 flat_df.to_excel(excel_buffer, index=False)
-st.download_button("📥 Download Excel", data=excel_buffer.getvalue(), file_name="stock_rankings.xlsx")
+st.download_button("📅 Download Excel", data=excel_buffer.getvalue(), file_name="stock_rankings.xlsx")
 
 # Sync to Sheet
 try:
