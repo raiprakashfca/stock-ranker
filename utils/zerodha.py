@@ -1,44 +1,30 @@
 # utils/zerodha.py
 
-from datetime import datetime, timedelta
+from kiteconnect import KiteConnect
 import pandas as pd
+import datetime as dt
 
-# Map symbol to NSE instrument format
-def format_symbol(symbol):
-    return f"NSE:{symbol}"
+def get_kite(api_key, access_token):
+    kite = KiteConnect(api_key=api_key)
+    kite.set_access_token(access_token)
+    return kite
 
-# Determine from-date for given interval
-def get_from_date(interval, days):
-    if interval == "day":
-        return datetime.now() - timedelta(days=days)
-    elif interval == "60minute":
-        return datetime.now() - timedelta(days=days)
-    elif interval == "15minute":
-        return datetime.now() - timedelta(days=days)
-    else:
-        raise ValueError(f"Unsupported interval: {interval}")
+def get_stock_data(kite, symbol, interval, days):
+    to_date = dt.datetime.now()
+    from_date = to_date - dt.timedelta(days=days)
 
-# Fetch historical OHLC data using Kite API
-def get_stock_data(kite, symbol, interval, days=30):
     try:
-        instruments = kite.instruments("NSE")
-        token_row = next((item for item in instruments if item["tradingsymbol"] == symbol), None)
-        if not token_row:
-            raise ValueError(f"Instrument not found for {symbol}")
-        instrument_token = token_row["instrument_token"]
-
-        from_date = get_from_date(interval, days)
-        to_date = datetime.now()
-
-        ohlc = kite.historical_data(
+        instrument_token = kite.ltp(f"NSE:{symbol}")[f"NSE:{symbol}"]["instrument_token"]
+        data = kite.historical_data(
             instrument_token,
             from_date,
             to_date,
-            interval=interval,
+            interval,
             continuous=False,
-            oi=True
+            oi=False
         )
-        return pd.DataFrame(ohlc)
+        df = pd.DataFrame(data)
+        return df
     except Exception as e:
-        print(f"❌ Error fetching data for {symbol}: {e}")
+        print(f"Error fetching data for {symbol}: {e}")
         return pd.DataFrame()
