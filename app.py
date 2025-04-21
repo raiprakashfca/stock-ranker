@@ -10,6 +10,9 @@ from utils.sheet_logger import log_to_google_sheets
 
 st.set_page_config(page_title="📊 Multi-Timeframe Stock Ranking Dashboard", layout="wide")
 
+# Auto refresh every minute
+st.markdown('<meta http-equiv="refresh" content="60">', unsafe_allow_html=True)
+
 st.markdown("""
 <style>
 th, td { border-right: 1px solid #ddd; }
@@ -41,7 +44,7 @@ th:first-child, td:first-child {
 
 st.title("📊 Multi-Timeframe Stock Ranking Dashboard")
 
-# Load Google Sheet credentials
+# Load credentials
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds_dict = json.loads(st.secrets["gspread_service_account"])
 creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
@@ -79,6 +82,8 @@ with st.spinner("🔍 Analyzing all timeframes..."):
             if not df.empty:
                 try:
                     result = calculate_scores(df)
+                    if label == "1d":
+                        row["Close (Prev Day)"] = float(df.iloc[-2]["close"])
                     for key, value in result.items():
                         adjusted_key = "TMV Score" if key == "Total Score" else key
                         row[f"{label} | {adjusted_key}"] = value
@@ -91,7 +96,11 @@ if not all_data:
     st.stop()
 
 final_df = pd.DataFrame(all_data)
-final_df["% Change"] = final_df["LTP"].pct_change().fillna(0).apply(lambda x: f"{x*100:.2f}%")
+
+# % Change from yesterday's close
+final_df["% Change"] = final_df.apply(
+    lambda row: f"{((row['LTP'] - row['Close (Prev Day)']) / row['Close (Prev Day)'] * 100):.2f}%" if row["Close (Prev Day)"] else "N/A", axis=1
+)
 
 # Display filtered and sorted
 sort_column = st.selectbox("Sort by", [col for col in final_df.columns if "Score" in col or "Reversal" in col])
