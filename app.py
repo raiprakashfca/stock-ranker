@@ -5,6 +5,7 @@ import gspread
 import json
 from oauth2client.service_account import ServiceAccountCredentials
 from io import BytesIO
+import time
 
 from utils.zerodha import get_stock_data
 from utils.indicators import calculate_scores
@@ -65,11 +66,25 @@ SYMBOLS = [
     "UPL", "ULTRACEMCO", "WIPRO"
 ]
 
+# Read latest LTP data from Google Sheet
+def fetch_ltp_sheet():
+    try:
+        ltp_sheet = client.open("LiveLTPStore").sheet1
+        records = ltp_sheet.get_all_records()
+        return {row['Symbol']: {'LTP': row['LTP'], '% Change': row['% Change']} for row in records}
+    except Exception as e:
+        st.error("Failed to load LTP data from Google Sheet")
+        return {symbol: {'LTP': 0, '% Change': 0} for symbol in SYMBOLS}
+
+ltp_data = fetch_ltp_sheet()
+
 # Data extraction
 all_data = []
 with st.spinner("🔄 Fetching and scoring data..."):
     for symbol in SYMBOLS:
         row = {"Symbol": symbol}
+        row.update(ltp_data.get(symbol, {"LTP": 0, "% Change": 0}))
+
         for label, config in TIMEFRAMES.items():
             df = get_stock_data(kite, symbol, config["interval"], config["days"])
             if df.empty:
@@ -92,6 +107,10 @@ columns = []
 for col in df.columns:
     if col == "Symbol":
         columns.append(("Meta", "Symbol"))
+    elif col == "LTP":
+        columns.append(("Meta", "LTP"))
+    elif col == "% Change":
+        columns.append(("Meta", "% Change"))
     elif "|" in col:
         tf, metric = map(str.strip, col.split("|"))
         columns.append((tf, metric))
@@ -102,7 +121,7 @@ df = df.set_index(("Meta", "Symbol"))
 
 # Display primary results
 st.markdown("### 🧠 Ranked Score Table")
-df_primary = df[[col for col in df.columns if col[1] in ['TMV Score', 'Trend Direction', 'Reversal Probability']]]
+df_primary = df[[col for col in df.columns if col[1] in ['LTP', '% Change', 'TMV Score', 'Trend Direction', 'Reversal Probability']]]
 st.dataframe(df_primary, use_container_width=True, hide_index=False)
 
 # Detailed scores
