@@ -1,150 +1,89 @@
-import streamlit as st
-import pandas as pd
-from kiteconnect import KiteConnect
-import gspread
 import json
-from oauth2client.service_account import ServiceAccountCredentials
-from io import BytesIO
 import time
+from kiteconnect import KiteConnect, KiteTicker
+import gspread
+import pandas as pd
+import streamlit as st
+from oauth2client.service_account import ServiceAccountCredentials
 
-from utils.zerodha import get_stock_data
-from utils.indicators import calculate_scores
-from utils.sheet_logger import log_to_google_sheets
-
-st.set_page_config(page_title="📊 Stock Ranker Dashboard", layout="wide", initial_sidebar_state="expanded")
-st.title("📊 Multi-Timeframe Stock Ranking Dashboard")
-
-# Sidebar: Zerodha login and token refresh
-st.sidebar.title("🔐 Zerodha Access")
-st.sidebar.markdown("Use the link below to login and paste your request token if required.")
-
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds_dict = json.loads(st.secrets["gspread_service_account"])
-creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-client = gspread.authorize(creds)
-
-# Load credentials from Google Sheet
-sheet = client.open("ZerodhaTokenStore").sheet1
-tokens = sheet.get_all_values()[0]
-api_key = tokens[0]
-api_secret = tokens[1]
-access_token = tokens[2]
-
-kite = KiteConnect(api_key=api_key)
-try:
-    kite.set_access_token(access_token)
-except Exception:
-    st.sidebar.markdown(f"[🔗 Login to Zerodha](https://kite.zerodha.com/connect/login?v=3&api_key={api_key})")
-    request_token = st.sidebar.text_input("🔑 Paste Request Token")
-
-    if request_token:
-        try:
-            session = kite.generate_session(request_token, api_secret=api_secret)
-            sheet.update_cell(1, 3, session["access_token"])
-            st.sidebar.success("✅ Token updated. Please refresh the app.")
-            st.stop()
-        except Exception as e:
-            st.sidebar.error("❌ Token update failed.")
-            st.sidebar.exception(e)
-    else:
-        st.sidebar.warning("⚠️ Invalid token. Please generate a new one using the link above.")
-        st.stop()
-
-# Configuration
-TIMEFRAMES = {
-    "15m": {"interval": "15minute", "days": 5},
-    "1h": {"interval": "60minute", "days": 15},
-    "1d": {"interval": "day", "days": 90},
-}
+# === CONFIGURATION ===
+LTP_SHEET_NAME = "LiveLTPStore"
 SYMBOLS = [
-    "ADANIENT", "ADANIPORTS", "APOLLOHOSP", "ASIANPAINT", "AXISBANK", "BAJAJ-AUTO",
-    "BAJAJFINSV", "BPCL", "BHARTIARTL", "BRITANNIA", "CIPLA", "COALINDIA", "DIVISLAB",
-    "DRREDDY", "EICHERMOT", "GRASIM", "HCLTECH", "HDFCBANK", "HDFCLIFE", "HEROMOTOCO",
-    "HINDALCO", "HINDUNILVR", "ICICIBANK", "ITC", "INDUSINDBK", "INFY", "JSWSTEEL", "KOTAKBANK",
-    "LT", "M&M", "MARUTI", "NTPC", "NESTLEIND", "ONGC", "POWERGRID", "RELIANCE", "SBILIFE",
-    "SBIN", "SUNPHARMA", "TCS", "TATACONSUM", "TATAMOTORS", "TATASTEEL", "TECHM", "TITAN",
-    "UPL", "ULTRACEMCO", "WIPRO"
+    "RELIANCE", "INFY", "TCS", "ICICIBANK", "HDFCBANK",
+    "SBIN", "BHARTIARTL", "AXISBANK", "LT", "ITC",
+    "KOTAKBANK", "HCLTECH", "WIPRO", "TECHM", "ADANIENT",
+    "ADANIPORTS", "BAJAJFINSV", "BAJFINANCE", "TITAN", "POWERGRID",
+    "COALINDIA", "NTPC", "JSWSTEEL", "ULTRACEMCO", "TATAMOTORS",
+    "TATASTEEL", "BPCL", "ONGC", "DIVISLAB", "SUNPHARMA",
+    "HINDALCO", "NESTLEIND", "ASIANPAINT", "CIPLA", "SBILIFE",
+    "HDFCLIFE", "GRASIM", "HEROMOTOCO", "EICHERMOT", "BRITANNIA",
+    "UPL", "APOLLOHOSP", "BAJAJ-AUTO", "INDUSINDBK", "DRREDDY",
+    "MARUTI", "M&M", "HINDUNILVR", "TATACONSUM", "ICICIPRULI"
 ]
 
-# Read latest LTP data from Google Sheet
-def fetch_ltp_sheet():
-    try:
-        ltp_sheet = client.open("LiveLTPStore").sheet1
-        records = ltp_sheet.get_all_records()
-        return {row['Symbol']: {'LTP': row['LTP'], '% Change': row['% Change']} for row in records}
-    except Exception as e:
-        st.error("Failed to load LTP data from Google Sheet")
-        return {symbol: {'LTP': 0, '% Change': 0} for symbol in SYMBOLS}
+# === STEP 1: Load API and Sheet Credentials ===
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+with open("zerodhatokensaver-1b53153ffd25.json") as f:
+    creds_dict = json.load(f)
+creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+client = gspread.authorize(creds)
+sheet = client.open(LTP_SHEET_NAME).sheet1
 
-ltp_data = fetch_ltp_sheet()
+tokens = client.open("ZerodhaTokenStore").sheet1.get_all_values()[0]
+api_key, api_secret, access_token = tokens[0], tokens[1], tokens[2]
 
-# Auto refresh every 1 minute
-st_autorefresh = st.experimental_rerun if st.button("🔄 Refresh Now") else None
-st_autorefresh = st_autorefresh or st.experimental_singleton(lambda: time.sleep(60))
+kite = KiteConnect(api_key=api_key)
+kite.set_access_token(access_token)
 
-# Data extraction
-all_data = []
-with st.spinner("🔄 Fetching and scoring data..."):
-    for symbol in SYMBOLS:
-        row = {"Symbol": symbol}
-        row.update(ltp_data.get(symbol, {"LTP": 0, "% Change": 0}))
+# === STEP 2: Get Instrument Tokens for Desired Stocks ===
+print("Fetching instrument tokens...")
+instruments = kite.instruments("NSE")
+symbol_map = {}
+for item in instruments:
+    if item["tradingsymbol"] in SYMBOLS and item["segment"] == "NSE":
+        symbol_map[item["instrument_token"]] = item["tradingsymbol"]
 
-        for label, config in TIMEFRAMES.items():
-            df = get_stock_data(kite, symbol, config["interval"], config["days"])
-            if df.empty:
-                continue
-            try:
-                result = calculate_scores(df)
-                for key, value in result.items():
-                    row[f"{label} | {key}"] = value
-            except Exception as e:
-                st.warning(f"⚠️ {symbol} {label} failed: {e}")
-        all_data.append(row)
+print(f"Tracking {len(symbol_map)} symbols...")
 
-if not all_data:
-    st.error("❌ No data found.")
-    st.stop()
+# === STEP 3: Set up KiteTicker ===
+kws = KiteTicker(api_key, access_token)
 
-# DataFrame setup
-df = pd.DataFrame(all_data).round(2)
-columns = []
-for col in df.columns:
-    if col == "Symbol":
-        columns.append(("Meta", "Symbol"))
-    elif col == "LTP":
-        columns.append(("Meta", "LTP"))
-    elif col == "% Change":
-        columns.append(("Meta", "% Change"))
-    elif "|" in col:
-        tf, metric = map(str.strip, col.split("|"))
-        columns.append((tf, metric))
-    else:
-        columns.append(("Other", col))
-df.columns = pd.MultiIndex.from_tuples(columns)
-df = df.set_index(("Meta", "Symbol"))
+# === STEP 4: Live Tick Callback ===
+def on_ticks(ws, ticks):
+    data = []
+    for tick in ticks:
+        instrument_token = tick["instrument_token"]
+        ltp = tick.get("last_price")
+        symbol = symbol_map.get(instrument_token, "Unknown")
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        data.append([timestamp, symbol, ltp])
 
-# Display primary results
-st.markdown("### 🧠 Ranked Score Table")
-df_primary = df[[col for col in df.columns if col[1] in ['LTP', '% Change', 'TMV Score', 'Trend Direction', 'Reversal Probability']]]
-st.dataframe(df_primary, use_container_width=True, hide_index=False)
+    if data:
+        try:
+            df = pd.DataFrame(data, columns=["Timestamp", "Symbol", "LTP"])
+            sheet_data = sheet.get_all_records()
+            existing = pd.DataFrame(sheet_data)
+            merged = pd.concat([existing, df], ignore_index=True).drop_duplicates(subset=["Symbol"], keep="last")
+            sheet.clear()
+            sheet.append_rows([list(merged.columns)] + merged.astype(str).values.tolist())
+            print(f"Logged {len(data)} LTPs at {timestamp}")
+        except Exception as e:
+            print(f"Error updating sheet: {e}")
 
-# Detailed scores
-df_detailed = df[[col for col in df.columns if col[1] in ['Trend Score', 'Momentum Score', 'Volume Score']]]
-with st.expander("📊 Show Detailed Trend/Momentum/Volume Scores"):
-    st.dataframe(df_detailed, use_container_width=True, hide_index=False)
+def on_connect(ws, response):
+    print("Connected to KiteTicker WebSocket!")
+    ws.subscribe(list(symbol_map.keys()))
 
-# Save to Excel
-excel_buffer = BytesIO()
-flat_df = df.reset_index().round(2)
-flat_df.columns = [' '.join(col).strip() if isinstance(col, tuple) else col for col in flat_df.columns]
-flat_df.to_excel(excel_buffer, index=False)
-st.download_button("📅 Download Excel", data=excel_buffer.getvalue(), file_name="stock_rankings.xlsx")
+def on_close(ws, code, reason):
+    print("WebSocket closed", code, reason)
 
-# Sync to Sheet
-try:
-    if isinstance(flat_df, pd.DataFrame):
-        log_to_google_sheets("Stock Rankings", flat_df)
-    else:
-        st.warning("⚠️ Skipped Google Sheet log: flat_df is not a valid DataFrame")
-except Exception as e:
-    st.warning(f"⚠️ Sheet log failed: {e}")
+def on_error(ws, code, reason):
+    print("WebSocket error", code, reason)
+
+kws.on_ticks = on_ticks
+kws.on_connect = on_connect
+kws.on_close = on_close
+kws.on_error = on_error
+
+print("Starting WebSocket stream...")
+kws.connect(threaded=False)
