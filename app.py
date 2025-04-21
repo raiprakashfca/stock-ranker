@@ -1,89 +1,133 @@
 import json
-import time
-from kiteconnect import KiteConnect, KiteTicker
-import gspread
 import pandas as pd
 import streamlit as st
+import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+from io import BytesIO
+from utils.zerodha import get_kite, get_stock_data
+from utils.indicators import calculate_scores
+from utils.sheet_logger import log_to_google_sheets
 
-# === CONFIGURATION ===
-LTP_SHEET_NAME = "LiveLTPStore"
-SYMBOLS = [
-    "RELIANCE", "INFY", "TCS", "ICICIBANK", "HDFCBANK",
-    "SBIN", "BHARTIARTL", "AXISBANK", "LT", "ITC",
-    "KOTAKBANK", "HCLTECH", "WIPRO", "TECHM", "ADANIENT",
-    "ADANIPORTS", "BAJAJFINSV", "BAJFINANCE", "TITAN", "POWERGRID",
-    "COALINDIA", "NTPC", "JSWSTEEL", "ULTRACEMCO", "TATAMOTORS",
-    "TATASTEEL", "BPCL", "ONGC", "DIVISLAB", "SUNPHARMA",
-    "HINDALCO", "NESTLEIND", "ASIANPAINT", "CIPLA", "SBILIFE",
-    "HDFCLIFE", "GRASIM", "HEROMOTOCO", "EICHERMOT", "BRITANNIA",
-    "UPL", "APOLLOHOSP", "BAJAJ-AUTO", "INDUSINDBK", "DRREDDY",
-    "MARUTI", "M&M", "HINDUNILVR", "TATACONSUM", "ICICIPRULI"
-]
+st.set_page_config(page_title="📊 Multi-Timeframe Stock Ranking Dashboard", layout="wide")
 
-# === STEP 1: Load API and Sheet Credentials ===
+st.markdown("""
+<style>
+th, td { border-right: 1px solid #ddd; }
+.score-badge {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 8px;
+    font-weight: bold;
+    min-width: 80px;
+    text-align: center;
+}
+.high { background-color: #28a745; color: white; }
+.medium { background-color: #ffc107; color: black; }
+.low { background-color: #dc3545; color: white; }
+.direction { font-weight: bold; padding: 2px 6px; border-radius: 6px; margin-left: 6px; }
+.bullish { background-color: #c6f6d5; color: #22543d; }
+.bearish { background-color: #fed7d7; color: #742a2a; }
+.neutral { background-color: #fff3cd; color: #856404; }
+th:first-child, td:first-child {
+  position: sticky;
+  left: 0;
+  background-color: #2a2a2a;
+  z-index: 2;
+  color: #fff;
+  font-weight: bold;
+}
+</style>
+""", unsafe_allow_html=True)
+
+st.title("📊 Multi-Timeframe Stock Ranking Dashboard")
+
+# Load Google Sheet credentials
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-with open("zerodhatokensaver-1b53153ffd25.json") as f:
-    creds_dict = json.load(f)
+creds_dict = json.loads(st.secrets["gspread_service_account"])
 creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
 client = gspread.authorize(creds)
-sheet = client.open(LTP_SHEET_NAME).sheet1
 
-tokens = client.open("ZerodhaTokenStore").sheet1.get_all_values()[0]
+# Read live LTPs
+ltp_sheet = client.open("LiveLTPStore").sheet1
+ltp_data = pd.DataFrame(ltp_sheet.get_all_records())
+
+# Read Zerodha credentials
+token_sheet = client.open("ZerodhaTokenStore").sheet1
+tokens = token_sheet.get_all_values()[0]
 api_key, api_secret, access_token = tokens[0], tokens[1], tokens[2]
 
-kite = KiteConnect(api_key=api_key)
-kite.set_access_token(access_token)
+# Initialize Kite
+kite = get_kite(api_key, access_token)
 
-# === STEP 2: Get Instrument Tokens for Desired Stocks ===
-print("Fetching instrument tokens...")
-instruments = kite.instruments("NSE")
-symbol_map = {}
-for item in instruments:
-    if item["tradingsymbol"] in SYMBOLS and item["segment"] == "NSE":
-        symbol_map[item["instrument_token"]] = item["tradingsymbol"]
+TIMEFRAMES = {
+    "15m": {"interval": "15minute", "days": 5},
+    "1h": {"interval": "60minute", "days": 15},
+    "1d": {"interval": "day", "days": 90},
+}
 
-print(f"Tracking {len(symbol_map)} symbols...")
+symbols = ltp_data["Symbol"].tolist()
+all_data = []
 
-# === STEP 3: Set up KiteTicker ===
-kws = KiteTicker(api_key, access_token)
+with st.spinner("🔍 Analyzing all timeframes..."):
+    for symbol in symbols:
+        row = {"Symbol": symbol}
+        live_row = ltp_data[ltp_data["Symbol"] == symbol]
+        if not live_row.empty:
+            row["LTP"] = float(live_row.iloc[0]["LTP"])
+        for label, config in TIMEFRAMES.items():
+            df = get_stock_data(kite, symbol, config["interval"], config["days"])
+            if not df.empty:
+                try:
+                    result = calculate_scores(df)
+                    for key, value in result.items():
+                        adjusted_key = "TMV Score" if key == "Total Score" else key
+                        row[f"{label} | {adjusted_key}"] = value
+                except Exception as e:
+                    st.warning(f"⚠️ {symbol} ({label}) failed: {e}")
+        all_data.append(row)
 
-# === STEP 4: Live Tick Callback ===
-def on_ticks(ws, ticks):
-    data = []
-    for tick in ticks:
-        instrument_token = tick["instrument_token"]
-        ltp = tick.get("last_price")
-        symbol = symbol_map.get(instrument_token, "Unknown")
-        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-        data.append([timestamp, symbol, ltp])
+if not all_data:
+    st.error("❌ No stock data available.")
+    st.stop()
 
-    if data:
-        try:
-            df = pd.DataFrame(data, columns=["Timestamp", "Symbol", "LTP"])
-            sheet_data = sheet.get_all_records()
-            existing = pd.DataFrame(sheet_data)
-            merged = pd.concat([existing, df], ignore_index=True).drop_duplicates(subset=["Symbol"], keep="last")
-            sheet.clear()
-            sheet.append_rows([list(merged.columns)] + merged.astype(str).values.tolist())
-            print(f"Logged {len(data)} LTPs at {timestamp}")
-        except Exception as e:
-            print(f"Error updating sheet: {e}")
+final_df = pd.DataFrame(all_data)
+final_df["% Change"] = final_df["LTP"].pct_change().fillna(0).apply(lambda x: f"{x*100:.2f}%")
 
-def on_connect(ws, response):
-    print("Connected to KiteTicker WebSocket!")
-    ws.subscribe(list(symbol_map.keys()))
+# Display filtered and sorted
+sort_column = st.selectbox("Sort by", [col for col in final_df.columns if "Score" in col or "Reversal" in col])
+sort_asc = st.radio("Order", ["Descending", "Ascending"]) == "Ascending"
+limit = st.slider("Top N Symbols", 1, len(final_df), 10)
 
-def on_close(ws, code, reason):
-    print("WebSocket closed", code, reason)
+final_df = final_df.sort_values(by=sort_column, ascending=sort_asc).head(limit)
 
-def on_error(ws, code, reason):
-    print("WebSocket error", code, reason)
+# Highlight logic
+highlight_conditions = (
+    (final_df[["15m | Trend Direction", "1h | Trend Direction", "1d | Trend Direction"]] == "Bullish").all(axis=1) &
+    (final_df[["15m | TMV Score", "1h | TMV Score", "1d | TMV Score"]] >= 0.8).all(axis=1)
+)
+highlight_red = (
+    (final_df[["15m | Trend Direction", "1h | Trend Direction", "1d | Trend Direction"]] == "Bearish").all(axis=1) &
+    (final_df[["15m | TMV Score", "1h | TMV Score", "1d | TMV Score"]] >= 0.8).all(axis=1)
+)
 
-kws.on_ticks = on_ticks
-kws.on_connect = on_connect
-kws.on_close = on_close
-kws.on_error = on_error
+def highlight_row(row):
+    if highlight_conditions.loc[row.name]:
+        return ["background-color: #d4edda"] * len(row)
+    elif highlight_red.loc[row.name]:
+        return ["background-color: #f8d7da"] * len(row)
+    else:
+        return [""] * len(row)
 
-print("Starting WebSocket stream...")
-kws.connect(threaded=False)
+styled_df = final_df.style.apply(highlight_row, axis=1)
+st.dataframe(styled_df, use_container_width=True, hide_index=False)
+
+# Export to Excel
+excel_buffer = BytesIO()
+final_df.to_excel(excel_buffer, index=False)
+st.download_button("📥 Download Excel", data=excel_buffer.getvalue(), file_name="stock_rankings.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+try:
+    log_to_google_sheets(sheet_name="Combined", df=final_df)
+    st.success("✅ Data saved to Google Sheet.")
+except Exception as e:
+    st.warning(f"⚠️ Could not update Google Sheet: {e}")
