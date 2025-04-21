@@ -10,49 +10,34 @@ from utils.zerodha import get_stock_data
 from utils.indicators import calculate_scores
 from utils.sheet_logger import log_to_google_sheets
 
-def log_to_google_sheets(sheet_name, df):
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    try:
-        if not isinstance(df, pd.DataFrame):
-            st.warning("🛑 Sheet log failed: Provided data is not a DataFrame")
-            return
-
-        creds_dict = json.loads(st.secrets["gspread_service_account"])
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-        client = gspread.authorize(creds)
-        sheet = client.open("Stock Rankings").worksheet(sheet_name)
-
-        df = df.round(2)
-        sheet.clear()
-        data = [df.columns.tolist()] + df.values.tolist()
-        sheet.update("A1", data)
-    except Exception as e:
-        st.warning(f"⚠️ Could not update Google Sheet: {e}")
-
 st.set_page_config(page_title="📊 Stock Ranker Dashboard", layout="wide", initial_sidebar_state="expanded")
 st.title("📊 Multi-Timeframe Stock Ranking Dashboard")
 
 # Sidebar: Zerodha login and token refresh
 st.sidebar.title("🔐 Zerodha Access")
-st.sidebar.markdown("Use the link below to login and paste your request token.")
+st.sidebar.markdown("Use the link below to login and paste your request token if required.")
 
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-try:
-    creds_dict = json.loads(st.secrets["gspread_service_account"])
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    client = gspread.authorize(creds)
-    sheet = client.open("ZerodhaTokenStore").sheet1
-    tokens = sheet.get_all_values()[0]
-    api_key = tokens[0]
-    api_secret = tokens[1]
-    access_token = tokens[2]
+creds_dict = json.loads(st.secrets["gspread_service_account"])
+creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+client = gspread.authorize(creds)
 
+# Load credentials from Google Sheet
+sheet = client.open("ZerodhaTokenStore").sheet1
+tokens = sheet.get_all_values()[0]
+api_key = tokens[0]
+api_secret = tokens[1]
+access_token = tokens[2]
+
+kite = KiteConnect(api_key=api_key)
+try:
+    kite.set_access_token(access_token)
+except Exception:
     st.sidebar.markdown(f"[🔗 Login to Zerodha](https://kite.zerodha.com/connect/login?v=3&api_key={api_key})")
     request_token = st.sidebar.text_input("🔑 Paste Request Token")
 
     if request_token:
         try:
-            kite = KiteConnect(api_key=api_key)
             session = kite.generate_session(request_token, api_secret=api_secret)
             sheet.update_cell(1, 3, session["access_token"])
             st.sidebar.success("✅ Token updated. Please refresh the app.")
@@ -60,17 +45,9 @@ try:
         except Exception as e:
             st.sidebar.error("❌ Token update failed.")
             st.sidebar.exception(e)
-except Exception as e:
-    st.sidebar.error("❌ Unable to access Google Sheet.")
-    st.stop()
-
-# Authenticated Kite connection
-kite = KiteConnect(api_key=api_key)
-try:
-    kite.set_access_token(access_token)
-except Exception:
-    st.error("⚠️ Access token invalid. Use sidebar to update it.")
-    st.stop()
+    else:
+        st.sidebar.warning("⚠️ Invalid token. Please generate a new one using the link above.")
+        st.stop()
 
 # Configuration
 TIMEFRAMES = {
@@ -123,55 +100,14 @@ for col in df.columns:
 df.columns = pd.MultiIndex.from_tuples(columns)
 df = df.set_index(("Meta", "Symbol"))
 
-# Highlight rows based on conditions
-def highlight_rows(row):
-    if (
-        row[("15m", "Trend Direction")] == "Bullish" and
-        row[("1h", "Trend Direction")] == "Bullish" and
-        row[("1d", "Trend Direction")] == "Bullish" and
-        row[("15m", "TMV Score")] >= 0.8 and
-        row[("1h", "TMV Score")] >= 0.8 and
-        row[("1d", "TMV Score")] >= 0.8
-    ):
-        return ["background-color: #28a745"] * len(row)
-    elif (
-        row[("15m", "Trend Direction")] == "Bearish" and
-        row[("1h", "Trend Direction")] == "Bearish" and
-        row[("1d", "Trend Direction")] == "Bearish" and
-        row[("15m", "TMV Score")] >= 0.8 and
-        row[("1h", "TMV Score")] >= 0.8 and
-        row[("1d", "TMV Score")] >= 0.8
-    ):
-        return ["background-color: #dc3545"] * len(row)
-    else:
-        return [""] * len(row)
-
-# Apply styles
-styled_df = df.style.apply(highlight_rows, axis=1)
-
-# Display improvements
-st.markdown("""
-<style>
-.stDataFrame td {
-  font-size: 12px;
-  padding: 4px 6px;
-  white-space: nowrap;
-}
-thead tr th {
-  border-bottom: 2px solid #333 !important;
-}
-th[colspan="3"] {
-  border-right: 3px solid #666 !important;
-}
-</style>
-""", unsafe_allow_html=True)
-
+# Display primary results
 st.markdown("### 🧠 Ranked Score Table")
 df_primary = df[[col for col in df.columns if col[1] in ['TMV Score', 'Trend Direction', 'Reversal Probability']]]
 st.dataframe(df_primary, use_container_width=True, hide_index=False)
 
+# Detailed scores
+df_detailed = df[[col for col in df.columns if col[1] in ['Trend Score', 'Momentum Score', 'Volume Score']]]
 with st.expander("📊 Show Detailed Trend/Momentum/Volume Scores"):
-    df_detailed = df[[col for col in df.columns if col[1] in ['Trend Score', 'Momentum Score', 'Volume Score']]]
     st.dataframe(df_detailed, use_container_width=True, hide_index=False)
 
 # Save to Excel
