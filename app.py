@@ -1,16 +1,13 @@
+
 import json
-import os
 import pandas as pd
 import streamlit as st
 import gspread
-from io import BytesIO
-from kiteconnect import KiteConnect
 from oauth2client.service_account import ServiceAccountCredentials
-from utils.sheet_logger import log_to_google_sheets
+from io import BytesIO
 
 st.set_page_config(page_title="📊 Multi-Timeframe Stock Ranking Dashboard", layout="wide")
 
-# UI Styling
 st.markdown("""
 <style>
 th, td { border-right: 1px solid #ddd; }
@@ -42,84 +39,47 @@ th:first-child, td:first-child {
 
 st.title("📊 Multi-Timeframe Stock Ranking Dashboard")
 
-# Load Google Sheet credentials
+# Google Sheets credentials
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds_dict = json.loads(st.secrets["gspread_credentials_json"])
+creds_dict = json.loads(st.secrets["gspread_service_account"])
 creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
 client = gspread.authorize(creds)
 
-# Load Token Info
-token_sheet = client.open("ZerodhaTokenStore").sheet1
-tokens = token_sheet.get_all_values()[0]
-api_key, api_secret, access_token = tokens[0], tokens[1], tokens[2]
-
-# Kite login and fallback
-def show_token_sidebar(api_key, api_secret):
-    st.sidebar.title("🔐 Refresh Zerodha Token")
-    st.sidebar.markdown(f"[Login to Zerodha](https://kite.trade/connect/login?api_key={api_key})", unsafe_allow_html=True)
-    access_code = st.sidebar.text_input("Paste access code here:")
-    if st.sidebar.button("Generate Token"):
-        try:
-            kite = KiteConnect(api_key=api_key)
-            session = kite.generate_session(access_code, api_secret=api_secret)
-            token_sheet.update("C1", session["access_token"])
-            st.sidebar.success("✅ Token Updated. Please refresh the app.")
-            st.stop()
-        except Exception as e:
-            st.sidebar.error(f"❌ Token generation failed: {e}")
-            st.stop()
-
-try:
-    kite = KiteConnect(api_key=api_key)
-    kite.set_access_token(access_token)
-    kite.profile()
-except Exception:
-    show_token_sidebar(api_key, api_secret)
-
-# Read analysis data
+# Read sheet
 sheet = client.open("BackgroundAnalysisStore").sheet1
 df = pd.DataFrame(sheet.get_all_records())
 
-# Sort / Filter Controls
-st.markdown("### 🔎 Sort and Filter")
-sort_column = st.selectbox("Sort by", ["TMV Score", "% Change"])
+# Rearrange LTP and % Change to be next to Symbol
+cols = df.columns.tolist()
+symbol_idx = cols.index("Symbol")
+ltp_idx = cols.index("LTP")
+chg_idx = cols.index("% Change")
+new_order = cols[:symbol_idx+1] + [cols[ltp_idx], cols[chg_idx]] + [c for i, c in enumerate(cols) if i not in (ltp_idx, chg_idx)]
+df = df[new_order]
+
+# Convert score fields to float and round
+score_fields = [c for c in df.columns if "Score" in c or "Probability" in c]
+for col in score_fields:
+    df[col] = pd.to_numeric(df[col], errors="coerce").round(2)
+
+# Filter/sort/limit
+sort_column = st.selectbox("Sort by", df.columns.tolist(), index=df.columns.get_loc("1d TMV Score"))
 sort_asc = st.radio("Order", ["Descending", "Ascending"]) == "Ascending"
-limit = st.slider("Top N Symbols", 1, len(df), 10)
-
-df["% Change"] = df["% Change"].str.replace("%", "").astype(float)
-df["TMV Score"] = df["TMV Score"].astype(float)
-
+limit = st.slider("Top N Symbols", 1, len(df), min(10, len(df)))
 df = df.sort_values(by=sort_column, ascending=sort_asc).head(limit)
 
-# Highlighting
+# Highlight rows based on direction + strength
 def highlight_row(row):
-    if (
-        row["15m Trend Direction"] == row["1d Trend Direction"] == "Bullish"
-        and row["15m TMV Score"] >= 0.8
-        and row["1d TMV Score"] >= 0.8
-    ):
+    if row["15m Trend Direction"] == row["1d Trend Direction"] == "Bullish" and row["1d TMV Score"] >= 0.8:
         return ["background-color: #d4edda"] * len(row)
-    elif (
-        row["15m Trend Direction"] == row["1d Trend Direction"] == "Bearish"
-        and row["15m TMV Score"] >= 0.8
-        and row["1d TMV Score"] >= 0.8
-    ):
+    elif row["15m Trend Direction"] == row["1d Trend Direction"] == "Bearish" and row["1d TMV Score"] >= 0.8:
         return ["background-color: #f8d7da"] * len(row)
     else:
         return [""] * len(row)
 
-styled = df.style.apply(highlight_row, axis=1)
+st.dataframe(df.style.apply(highlight_row, axis=1), use_container_width=True)
 
-st.markdown("### 📊 Live Stock Ranking (15m + 1d Analysis)")
-st.dataframe(styled, use_container_width=True)
-
-# Download
+# Export to Excel
 excel_buffer = BytesIO()
 df.to_excel(excel_buffer, index=False)
-st.download_button("📥 Download Excel", data=excel_buffer.getvalue(), file_name="stock_rankings.xlsx")
-
-try:
-    log_to_google_sheets(sheet_name="Combined", df=df)
-    st.success("✅ Logged to Google Sheet.")
-except Exception as e:
-    st.warning(f"⚠️ Could not update Google Sheet: {e}")
+st.download_button("📥 Download Excel", data=excel_buffer.getvalue(), file_name="stock_rankings.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
