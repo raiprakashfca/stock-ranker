@@ -1,69 +1,95 @@
-import pandas as pd
-import numpy as np
-import pandas_ta as ta
+# Ensure timestamp is datetime and set as index
+df['date'] = pd.to_datetime(df['date'])
+df.set_index('date', inplace=True)
 
-def calculate_scores(df):
-    scores = {}
+# Price columns required
+if not {'open', 'high', 'low', 'close', 'volume'}.issubset(df.columns):
+    return {}
 
-    # Ensure timestamp is datetime
-    df['date'] = pd.to_datetime(df['date'])
-    df.set_index('date', inplace=True)
+# Trend Indicators
+ema8 = ta.ema(df['close'], length=8)
+ema21 = ta.ema(df['close'], length=21)
+supertrend = ta.supertrend(df['high'], df['low'], df['close'])["SUPERT_7_3.0"]
 
-    # Price columns required
-    if not {'open', 'high', 'low', 'close', 'volume'}.issubset(df.columns):
-        return {}
+# Momentum Indicators
+macd = ta.macd(df['close'])
+rsi = ta.rsi(df['close'])
+adx = ta.adx(df['high'], df['low'], df['close'])
 
-    # Trend Indicators
-    ema8 = ta.ema(df['close'], length=8)
-    ema21 = ta.ema(df['close'], length=21)
-    supertrend = ta.supertrend(df['high'], df['low'], df['close'])["SUPERT_7_3.0"]
-    trend_score = ((ema8 > ema21).astype(int) + (df['close'] > supertrend).astype(int)) / 2
+# Volume Indicators
+obv = ta.obv(df['close'], df['volume'])
+mfi = ta.mfi(df['high'], df['low'], df['close'], df['volume'])
 
-    # Momentum Indicators
-    macd = ta.macd(df['close'])
-    rsi = ta.rsi(df['close'])
-    adx = ta.adx(df['high'], df['low'], df['close'])
-    momentum_score = (
-        (macd['MACD_12_26_9'] > macd['MACDs_12_26_9']).astype(int) +
-        (rsi > 50).astype(int) +
-        (adx['ADX_14'] > 20).astype(int)
-    ) / 3
+# Latest values
+close = df['close'].iloc[-1]
+latest_ema8 = ema8.iloc[-1]
+latest_ema21 = ema21.iloc[-1]
+latest_supertrend = supertrend.iloc[-1]
+latest_macd = macd['MACD_12_26_9'].iloc[-1]
+latest_signal = macd['MACDs_12_26_9'].iloc[-1]
+latest_rsi = rsi.iloc[-1]
+latest_adx = adx['ADX_14'].iloc[-1]
+obv_diff = obv.diff().iloc[-1]
+latest_mfi = mfi.iloc[-1]
 
-    # Volume Indicators
-    obv = ta.obv(df['close'], df['volume'])
-    mfi = ta.mfi(df['high'], df['low'], df['close'], df['volume'])
-    volume_score = (
-        (obv.diff() > 0).astype(int) +
-        (mfi > 50).astype(int)
-    ) / 2
+# Decision Tree Logic
 
-    # Weighted TMV Score
-    weights = {
-        'Trend Score': 0.4,
-        'Momentum Score': 0.35,
-        'Volume Score': 0.25
-    }
+# Trend Check
+if latest_ema8 > latest_ema21 and close > latest_supertrend:
+    trend = 'Strong'
+elif latest_ema8 > latest_ema21 or close > latest_supertrend:
+    trend = 'Moderate'
+else:
+    trend = 'Weak'
 
-    scores['Trend Score'] = trend_score.iloc[-1]
-    scores['Momentum Score'] = momentum_score.iloc[-1]
-    scores['Volume Score'] = volume_score.iloc[-1]
-    scores['TMV Score'] = (
-        scores['Trend Score'] * weights['Trend Score'] +
-        scores['Momentum Score'] * weights['Momentum Score'] +
-        scores['Volume Score'] * weights['Volume Score']
-    )
+# Momentum Check
+momentum_checks = sum([
+    latest_macd > latest_signal,
+    latest_rsi > 55,
+    latest_adx > 20
+])
+if momentum_checks == 3:
+    momentum = 'Strong'
+elif momentum_checks == 2:
+    momentum = 'Moderate'
+else:
+    momentum = 'Weak'
 
-    # Direction
-    if scores['Trend Score'] >= 0.75:
-        scores['Trend Direction'] = 'Bullish'
-    elif scores['Trend Score'] <= 0.25:
-        scores['Trend Direction'] = 'Bearish'
-    else:
-        scores['Trend Direction'] = 'Neutral'
+# Volume Check
+volume_checks = sum([
+    obv_diff > 0,
+    latest_mfi > 55
+])
+if volume_checks == 2:
+    volume = 'Strong'
+elif volume_checks == 1:
+    volume = 'Moderate'
+else:
+    volume = 'Weak'
 
-    # Reversal Probability
-    recent_rsi = rsi.iloc[-5:]
-    reversal = ((recent_rsi < 30) | (recent_rsi > 70)).sum() / 5
-    scores['Reversal Probability'] = reversal
+# Rule-Based TMV Scoring
+if trend == 'Strong' and momentum == 'Strong':
+    tmv_score = 1.0
+elif trend == 'Moderate' and momentum == 'Strong' and volume == 'Strong':
+    tmv_score = 0.9
+elif (trend == 'Moderate' or momentum == 'Moderate') and volume == 'Strong':
+    tmv_score = 0.7
+elif trend == 'Weak' and momentum == 'Weak':
+    tmv_score = 0.2
+else:
+    tmv_score = 0.5
 
-    return scores
+# Final TMV Score and qualitative direction
+scores['TMV Score'] = round(tmv_score, 2)
+scores['Trend Direction'] = (
+    'Bullish' if tmv_score >= 0.8 else
+    'Neutral' if tmv_score >= 0.5 else
+    'Bearish'
+)
+
+# Reversal Probability (based on RSI oversold/overbought zones)
+recent_rsi = rsi.iloc[-5:]
+reversal = ((recent_rsi < 30) | (recent_rsi > 70)).sum() / 5
+scores['Reversal Probability'] = round(reversal, 2)
+
+return scores
