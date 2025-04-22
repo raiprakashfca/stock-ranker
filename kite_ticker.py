@@ -1,83 +1,87 @@
 
-import json
 import os
+import json
+import base64
 import time
 import logging
-import gspread
+import pandas as pd
 from kiteconnect import KiteConnect, KiteTicker
 from oauth2client.service_account import ServiceAccountCredentials
-import pandas as pd
+import gspread
 from datetime import datetime
 
+# Setup logging
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger()
 
-# Decode credentials from environment variable
-creds_dict = json.loads(os.environ["GSPREAD_CREDENTIALS_JSON"])
+# Decode and load Google Sheets credentials from environment variable
+creds_base64 = os.environ.get("GSPREAD_CREDENTIALS_JSON", "")
+if not creds_base64:
+    raise ValueError("Missing GSPREAD_CREDENTIALS_JSON in environment variables")
+creds_dict = json.loads(base64.b64decode(creds_base64).decode())
 
 # Authorize gspread
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
 client = gspread.authorize(creds)
 
-# Read tokens from ZerodhaTokenStore
-sheet = client.open("ZerodhaTokenStore").sheet1
-api_key, api_secret, access_token = sheet.get_all_values()[0][:3]
+# Read Zerodha API credentials and access token from Google Sheet
+token_sheet = client.open("ZerodhaTokenStore").sheet1
+tokens = token_sheet.get_all_values()[0]
+api_key, api_secret, access_token = tokens[0], tokens[1], tokens[2]
 
 kite = KiteConnect(api_key=api_key)
 kite.set_access_token(access_token)
 
-# Get instrument tokens from symbols in BackgroundAnalysisStore
-try:
-    sheet_symbols = client.open("BackgroundAnalysisStore").sheet1
-    symbols = [row[0] for row in sheet_symbols.get_all_values()[1:] if row]
-    instruments = kite.ltp(symbols)
-    tokens = [instruments[sym]["instrument_token"] for sym in instruments]
-except Exception as e:
-    logging.error(f"Failed to fetch instrument tokens: {e}")
-    tokens = []
+# Fetch instrument tokens for NIFTY 50 symbols
+nifty50 = [s['tradingsymbol'] for s in kite.instruments("NSE") if s.get("name") == "NIFTY 50"]
+tokens = {}
+instrument_dump = kite.instruments("NSE")
+for symbol in nifty50:
+    try:
+        instrument = next(i for i in instrument_dump if i["tradingsymbol"] == symbol)
+        tokens[instrument["instrument_token"]] = symbol
+    except StopIteration:
+        logger.warning(f"Symbol not found: {symbol}")
 
-# WebSocket setup
-ticker = KiteTicker(api_key, access_token)
+# Prepare Google Sheet to store LTPs
+sheet = client.open("LiveLTPStore").sheet1
+sheet.update(values=[["Symbol", "LTP"]], range_name="A1:B1")
 
-ltp_data = {}
+# Setup KiteTicker
+kws = KiteTicker(api_key, access_token)
 
 def on_ticks(ws, ticks):
-    global ltp_data
+    rows = []
     for tick in ticks:
-        token = tick["instrument_token"]
-        ltp = tick.get("last_price")
-        for sym, meta in instruments.items():
-            if meta["instrument_token"] == token:
-                ltp_data[sym] = ltp
-    logging.info("✅ LTPs updated.")
+        symbol = tokens.get(tick["instrument_token"], "")
+        ltp = tick.get("last_price", 0)
+        rows.append([symbol, ltp])
+    if rows:
+        try:
+            sheet.update(values=rows, range_name="A2")
+        except Exception as e:
+            logger.error(f"❌ Failed to update sheet: {e}")
+        else:
+            logger.info("✅ Sheet updated with latest LTPs.")
 
 def on_connect(ws, response):
-    ws.subscribe(tokens)
-    logging.info("🎯 Subscribed to tokens.")
+    ws.subscribe(list(tokens.keys()))
+    logger.info("✅ Subscribed to instrument tokens.")
 
 def on_close(ws, code, reason):
-    logging.warning(f"⚠️ Connection closed: {reason}")
+    logger.warning(f"⚠️ Connection closed: {reason}")
 
 def on_error(ws, code, reason):
-    logging.error(f"❌ WebSocket error: {reason}")
+    logger.error(f"❌ WebSocket error: {reason}")
 
-ticker.on_ticks = on_ticks
-ticker.on_connect = on_connect
-ticker.on_close = on_close
-ticker.on_error = on_error
+logger.info("🚀 Starting Kite Ticker WebSocket...")
+kws.on_ticks = on_ticks
+kws.on_connect = on_connect
+kws.on_close = on_close
+kws.on_error = on_error
 
-logging.info("🚀 Starting Kite Ticker WebSocket...")
-ticker.connect(threaded=True)
-
-# Periodically update LiveLTPStore
-while True:
-    if ltp_data:
-        try:
-            sheet_ltp = client.open("LiveLTPStore").sheet1
-            rows = [[sym, ltp] for sym, ltp in ltp_data.items()]
-            sheet_ltp.update("A1:B1", [["Symbol", "LTP"]])
-            sheet_ltp.update("A2", rows)
-            logging.info("📈 Live LTPs pushed to sheet.")
-        except Exception as e:
-            logging.error(f"❌ Failed to update LTP sheet: {e}")
-    time.sleep(60)
+try:
+    kws.connect(threaded=False)
+except Exception as e:
+    logger.error(f"❌ Failed to connect to WebSocket: {e}")
