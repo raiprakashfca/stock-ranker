@@ -1,65 +1,55 @@
-import os
-import json
-import pandas as pd
+
 import streamlit as st
+import pandas as pd
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
-from io import BytesIO
-from streamlit_autorefresh import st_autorefresh
+from gspread_dataframe import get_as_dataframe
+from google.oauth2.service_account import Credentials
 
-# App layout
-st.set_page_config(page_title="📊 Multi-Timeframe Stock Ranking Dashboard", layout="wide")
+st.set_page_config(page_title="📊 TMV Scoreboard", layout="wide")
 
+# Load credentials and connect to Google Sheets
+def get_worksheet(sheet_name: str):
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/spreadsheets",
+             "https://www.googleapis.com/auth/drive.file", "https://www.googleapis.com/auth/drive"]
+    credentials_dict = dict(st.secrets["gcp_service_account"])
+    credentials = Credentials.from_service_account_info(credentials_dict, scopes=scope)
+    gc = gspread.authorize(credentials)
+    sheet = gc.open(sheet_name)
+    return sheet
+
+@st.cache_data(ttl=60)
+def load_background_analysis():
+    sheet = get_worksheet("BackgroundAnalysisStore")
+    ws = sheet.sheet1
+    df = pd.DataFrame(ws.get_all_records())
+    return df
+
+# Main app
 st.title("📊 Multi-Timeframe Stock Ranking Dashboard")
 
-# Auto-refresh every 5 minutes
-st_autorefresh(interval=5 * 60 * 1000, key="data_refresh")
+df = load_background_analysis()
 
-# Secrets fallback
-try:
-    creds_dict = json.loads(st.secrets["gspread_service_account"])
-except Exception:
-    st.error("❌ Missing or invalid Google Sheets credentials. Please check your Streamlit secrets.")
-    st.stop()
-
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-client = gspread.authorize(creds)
-
-# Load LiveLTPStore sheet with expected headers
-try:
-    sheet = client.open("LiveLTPStore").sheet1
-    records = sheet.get_all_records(expected_headers=["Symbol", "LTP", "% Change"])
-    ltp_df = pd.DataFrame(records)
-except Exception as e:
-    st.error(f"❌ Could not load sheet data: {e}")
-    st.stop()
-
-# Display control options
-with st.sidebar:
-    st.header("🔧 Controls")
-    st.markdown("✅ LTP auto-refreshes every 5 minutes.")
-    refresh_button = st.button("🔄 Manual Refresh")
-    st.markdown("---")
-
-if refresh_button:
-    st.experimental_rerun()
-
-# Display data
-st.subheader("📈 Live LTPs and % Changes")
-if not ltp_df.empty:
-    def highlight(row):
-        style = []
-        if row["% Change"] > 1.5:
-            style = ["background-color: #d4edda; color: black"] * len(row)
-        elif row["% Change"] < -1.5:
-            style = ["background-color: #f8d7da; color: black"] * len(row)
-        else:
-            style = [""] * len(row)
-        return style
-
-    ltp_df = ltp_df[["Symbol", "LTP", "% Change"]]  # Ensure correct order
-    st.dataframe(ltp_df.style.apply(highlight, axis=1), use_container_width=True)
+if df.empty:
+    st.warning("No data found.")
 else:
-    st.warning("⚠️ No LTP data found in the sheet.")
+    # Reorder columns
+    desired_order = ["Symbol", "LTP", "% Change"] + [col for col in df.columns if col not in ["Symbol", "LTP", "% Change"]]
+    df = df[desired_order]
+
+    # Styling
+    def highlight_change(val):
+        try:
+            val = float(val)
+            color = 'green' if val > 0 else 'red'
+            return f'color: {color}'
+        except:
+            return ''
+
+    st.dataframe(
+        df.style
+        .applymap(highlight_change, subset=["% Change"])
+        .format({"LTP": "{:.2f}", "% Change": "{:.2f}"}),
+        use_container_width=True
+    )
