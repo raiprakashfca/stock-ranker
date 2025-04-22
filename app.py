@@ -1,29 +1,60 @@
 
 import streamlit as st
 import pandas as pd
-from token_utils import load_credentials_from_gsheet
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+import json
+import os
 
-st.set_page_config(page_title="📊 TMV Stock Ranking", layout="wide")
+st.set_page_config(page_title="📊 Stock Ranker Dashboard", layout="wide")
 
-# Load API Key from secrets
-api_key = st.secrets["Zerodha_API_Key"]
+# === Load Google Sheet Credentials ===
+from google.oauth2.service_account import Credentials
 
-# Sidebar for Zerodha login
-st.sidebar.markdown("## 🔐 Zerodha Access Token Setup")
-login_url = f"https://kite.zerodha.com/connect/login?v=3&api_key={api_key}"
-st.sidebar.markdown(f"[🔗 Login to Zerodha]({login_url})", unsafe_allow_html=True)
-access_token = st.sidebar.text_input("Paste Access Token Here")
+def get_gsheet_client():
+    try:
+        gcp_credentials = st.secrets["gcp_service_account"]
+        scopes = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
+        credentials = Credentials.from_service_account_info(gcp_credentials, scopes=scopes)
+        client = gspread.authorize(credentials)
+        return client
+    except Exception as e:
+        st.error(f"❌ Failed to load credentials: {e}")
+        return None
 
-# Main content
-st.title("📈 Multi-Timeframe TMV Stock Ranking Dashboard")
+@st.cache_data(ttl=300)
+def load_background_analysis():
+    try:
+        client = get_gsheet_client()
+        if client is None:
+            return pd.DataFrame()
+        sheet = client.open("BackgroundAnalysisStore")
+        ws = sheet.worksheet("LiveScores")
+        df = pd.DataFrame(ws.get_all_records())
+        return df
+    except Exception as e:
+        st.error(f"❌ Failed to load data from Google Sheet: {e}")
+        return pd.DataFrame()
 
-# Load Background Analysis data
-sheet_url = "https://docs.google.com/spreadsheets/d/your-sheet-id/edit#gid=0"
-csv_export_url = sheet_url.replace("/edit#gid=", "/export?format=csv&gid=")
-try:
-    df = pd.read_csv(csv_export_url)
-    df = df[["Symbol", "LTP", "% Change", "15m TMV Score", "15m Trend Direction", "15m Reversal Probability", 
-             "1d TMV Score", "1d Trend Direction", "1d Reversal Probability"]]
+# === UI Sidebar for Access Token Management ===
+st.sidebar.header("🔐 Zerodha Access Token")
+st.sidebar.markdown(
+    "[🔗 Zerodha Login](https://kite.zerodha.com/connect/login?v=3&api_key=" + st.secrets["Zerodha_API_Key"] + ")"
+)
+st.sidebar.markdown("1. Click the link above to login via Zerodha.\n"
+                    "2. After successful login, copy the **Request Token** from the URL.\n"
+                    "3. Paste it below and click Submit.")
+request_token = st.sidebar.text_input("Paste your Request Token here")
+submit_token = st.sidebar.button("Submit Token")
+
+if submit_token and request_token:
+    st.sidebar.success("✅ Request Token submitted successfully!")
+    st.sidebar.code(request_token)
+
+# === Main App Content ===
+st.title("📊 Stock Ranking Dashboard")
+df = load_background_analysis()
+if not df.empty:
     st.dataframe(df, use_container_width=True)
-except Exception as e:
-    st.error(f"Failed to load data from Google Sheet: {e}")
+else:
+    st.warning("No data to display.")
