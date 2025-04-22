@@ -3,97 +3,113 @@ import json
 import pandas as pd
 import streamlit as st
 import gspread
-from datetime import datetime
 from oauth2client.service_account import ServiceAccountCredentials
 from io import BytesIO
-from streamlit_autorefresh import st_autorefresh
+from datetime import datetime
+from utils.zerodha import get_kite, get_stock_data
+from utils.sheet_logger import log_to_google_sheets
 
 st.set_page_config(page_title="📊 Multi-Timeframe Stock Ranking Dashboard", layout="wide")
 
-# Auto-refresh every 5 minutes
-st_autorefresh(interval=5 * 60 * 1000, key="refresh")
-
-# Sidebar
-st.sidebar.header("🔐 Zerodha API Token")
-st.sidebar.info("📅 Timestamp updates on every token refresh.")
-
-# Google Sheets Auth
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds_dict = json.loads(st.secrets["gspread_service_account"])
-creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-client = gspread.authorize(creds)
-
-# Load stock data from BackgroundAnalysisStore sheet
-try:
-    sheet = client.open("BackgroundAnalysisStore").sheet1
-    records = sheet.get_all_records()
-    if not records:
-        st.warning("⚠️ No data found in BackgroundAnalysisStore. Please try again later.")
-        st.stop()
-    df = pd.DataFrame(records)
-except Exception as e:
-    st.error(f"❌ Failed to read BackgroundAnalysisStore: {e}")
-    st.stop()
-
-# Move LTP and % Change columns next to Symbol
-if "LTP" in df.columns and "% Change" in df.columns:
-    cols = df.columns.tolist()
-    ltp_index = cols.index("LTP")
-    pct_index = cols.index("% Change")
-    reordered_cols = (
-        ["Symbol", "LTP", "% Change"]
-        + [col for col in cols if col not in ["Symbol", "LTP", "% Change"]]
-    )
-    df = df[reordered_cols]
+st.markdown("""
+<style>
+th, td { border-right: 1px solid #ddd; }
+.score-badge {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 8px;
+    font-weight: bold;
+    min-width: 80px;
+    text-align: center;
+}
+.high { background-color: #28a745; color: white; }
+.medium { background-color: #ffc107; color: black; }
+.low { background-color: #dc3545; color: white; }
+.direction { font-weight: bold; padding: 2px 6px; border-radius: 6px; margin-left: 6px; }
+.bullish { background-color: #c6f6d5; color: #22543d; }
+.bearish { background-color: #fed7d7; color: #742a2a; }
+.neutral { background-color: #fff3cd; color: #856404; }
+th:first-child, td:first-child {
+  position: sticky;
+  left: 0;
+  background-color: #2a2a2a;
+  z-index: 2;
+  color: #fff;
+  font-weight: bold;
+}
+</style>
+""", unsafe_allow_html=True)
 
 st.title("📊 Multi-Timeframe Stock Ranking Dashboard")
 
-# Sorting & filtering
-sort_column = st.selectbox("📌 Sort by", [col for col in df.columns if "Score" in col or "Reversal" in col])
-sort_asc = st.radio("🔼 Order", ["Descending", "Ascending"]) == "Ascending"
-limit = st.slider("🔢 Top N Symbols", 1, len(df), min(20, len(df)))
+# Sidebar to manage token
+st.sidebar.header("🔐 Zerodha API Token Manager")
+st.sidebar.info("📅 Timestamp updates on every token refresh.")
+if "api_key" not in st.session_state or "access_token" not in st.session_state:
+    st.session_state.api_key = ""
+    st.session_state.access_token = ""
 
-df = df.sort_values(by=sort_column, ascending=sort_asc).head(limit)
+# Load credentials from secrets
+creds_dict = st.secrets["gspread_service_account"]
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+client = gspread.authorize(creds)
 
-# Highlighting conditions
-highlight_conditions = (
-    (df[["15m Trend Direction", "1d Trend Direction"]] == "Bullish").all(axis=1)
-    & (df[["15m TMV Score", "1d TMV Score"]] >= 0.8).all(axis=1)
-)
-highlight_red = (
-    (df[["15m Trend Direction", "1d Trend Direction"]] == "Bearish").all(axis=1)
-    & (df[["15m TMV Score", "1d TMV Score"]] >= 0.8).all(axis=1)
-)
+token_sheet = client.open("ZerodhaTokenStore").sheet1
+tokens = token_sheet.get_all_values()[0]
+api_key, api_secret, access_token = tokens[0], tokens[1], tokens[2]
+st.session_state.api_key = api_key
+st.session_state.access_token = access_token
 
+# Show login link
+login_url = f"https://kite.zerodha.com/connect/login?v=3&api_key={api_key}"
+st.sidebar.markdown(f"[🔗 Click here to login and generate access token]({login_url})")
+
+# Token input and update
+access_code = st.sidebar.text_input("Paste access token here:")
+if st.sidebar.button("🔄 Update Token"):
+    token_sheet.update("C1", access_code)
+    token_sheet.update("D1", str(datetime.now()))
+    st.success("✅ Access token updated successfully.")
+    st.rerun()
+
+# Read from Google Sheet
+sheet = client.open("BackgroundAnalysisStore").sheet1
+data = pd.DataFrame(sheet.get_all_records())
+
+# Format columns
+data["% Change"] = data["% Change"].apply(lambda x: f"{x:.2f}%" if isinstance(x, (int, float)) else x)
+data["LTP"] = data["LTP"].apply(lambda x: round(x, 2) if isinstance(x, (int, float)) else x)
+
+# Rearranged columns
+cols = data.columns.tolist()
+reordered_cols = ["Symbol", "LTP", "% Change"] + [col for col in cols if col not in ["Symbol", "LTP", "% Change"]]
+data = data[reordered_cols]
+
+# Sorting and filtering
+sort_col = st.selectbox("Sort by", [col for col in data.columns if "Score" in col or "Reversal" in col])
+ascending = st.radio("Order", ["Descending", "Ascending"]) == "Ascending"
+top_n = st.slider("Top N Symbols", 1, len(data), 10)
+
+data = data.sort_values(by=sort_col, ascending=ascending).head(top_n)
+
+# Highlight logic
 def highlight_row(row):
-    if highlight_conditions.loc[row.name]:
-        return ["background-color: #c7f3d0; color: black"] * len(row)
-    elif highlight_red.loc[row.name]:
-        return ["background-color: #f8cfcf; color: black"] * len(row)
+    bullish = row["15m Trend Direction"] == "Bullish" and row["1d Trend Direction"] == "Bullish"
+    bearish = row["15m Trend Direction"] == "Bearish" and row["1d Trend Direction"] == "Bearish"
+    high_score = row["15m TMV Score"] >= 0.8 and row["1d TMV Score"] >= 0.8
+
+    if bullish and high_score:
+        return ['background-color: #d4edda; color: black'] * len(row)
+    elif bearish and high_score:
+        return ['background-color: #f8d7da; color: black'] * len(row)
     else:
-        return [""] * len(row)
+        return [''] * len(row)
 
-# Display styled table
-styled_df = df.style.apply(highlight_row, axis=1)
-st.dataframe(styled_df, use_container_width=True, hide_index=False)
+styled = data.style.apply(highlight_row, axis=1)
+st.dataframe(styled, use_container_width=True, hide_index=False)
 
-# Excel export
-excel_buffer = BytesIO()
-df.to_excel(excel_buffer, index=False)
-st.download_button("📥 Download Excel", data=excel_buffer.getvalue(), file_name="stock_rankings.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-# API token refresh logic
-with st.sidebar.expander("🔁 Update Access Token"):
-    api_key = st.text_input("API Key", value="")
-    api_secret = st.text_input("API Secret", value="", type="password")
-    access_token = st.text_input("Access Token", value="", type="password")
-
-    if st.button("✅ Save Token"):
-        try:
-            sheet = client.open("ZerodhaTokenStore").sheet1
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            sheet.update("A1:C1", [[api_key, api_secret, access_token]])
-            sheet.update("D1", [[timestamp]])
-            st.success("🔑 API Token updated successfully!")
-        except Exception as e:
-            st.error(f"Failed to update token: {e}")
+# Download
+buffer = BytesIO()
+data.to_excel(buffer, index=False)
+st.download_button("📥 Download Excel", buffer.getvalue(), file_name="stock_rankings.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
