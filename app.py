@@ -1,60 +1,67 @@
-
 import streamlit as st
 import pandas as pd
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-import json
-import os
+from kiteconnect import KiteConnect
+from datetime import datetime
 
-st.set_page_config(page_title="📊 Stock Ranker Dashboard", layout="wide")
+st.set_page_config(page_title="📊 TMV Stock Ranking", layout="wide")
 
-# === Load Google Sheet Credentials ===
-from google.oauth2.service_account import Credentials
+# Setup Google Sheets connection
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+creds = ServiceAccountCredentials.from_json_keyfile_name("gcreds.json", scope)
+client = gspread.authorize(creds)
 
-def get_gsheet_client():
+# Access ZerodhaTokenStore > Sheet1
+token_sheet = client.open("ZerodhaTokenStore").worksheet("Sheet1")
+api_key = token_sheet.acell("A1").value
+api_secret = token_sheet.acell("B1").value
+
+# Sidebar layout
+st.sidebar.markdown("## 🔐 Zerodha Access Token Setup")
+
+# 1. Zerodha login link
+login_url = f"https://kite.zerodha.com/connect/login?v=3&api_key={api_key}"
+st.sidebar.markdown(f"👉 [Login to Zerodha]({login_url})", unsafe_allow_html=True)
+
+# 2. Input box for Request Token
+request_token = st.sidebar.text_input("Paste Request Token Here")
+
+# 3. Button to generate and store access token
+if st.sidebar.button("Generate Access Key"):
     try:
-        gcp_credentials = st.secrets["gcp_service_account"]
-        scopes = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
-        credentials = Credentials.from_service_account_info(gcp_credentials, scopes=scopes)
-        client = gspread.authorize(credentials)
-        return client
+        kite = KiteConnect(api_key=api_key)
+        session_data = kite.generate_session(request_token, api_secret=api_secret)
+        access_token = session_data["access_token"]
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        token_sheet.update("C1", access_token)
+        token_sheet.update("D1", timestamp)
+        st.sidebar.success("✅ Access Token saved successfully.")
     except Exception as e:
-        st.error(f"❌ Failed to load credentials: {e}")
-        return None
+        st.sidebar.error(f"❌ Failed to generate access token: {e}")
 
-@st.cache_data(ttl=300)
-def load_background_analysis():
-    try:
-        client = get_gsheet_client()
-        if client is None:
-            return pd.DataFrame()
-        sheet = client.open("BackgroundAnalysisStore")
-        ws = sheet.worksheet("LiveScores")
-        df = pd.DataFrame(ws.get_all_records())
-        return df
-    except Exception as e:
-        st.error(f"❌ Failed to load data from Google Sheet: {e}")
-        return pd.DataFrame()
+# Main Dashboard UI
+st.title("📈 Multi-Timeframe TMV Stock Ranking Dashboard")
 
-# === UI Sidebar for Access Token Management ===
-st.sidebar.header("🔐 Zerodha Access Token")
-st.sidebar.markdown(
-    "[🔗 Zerodha Login](https://kite.zerodha.com/connect/login?v=3&api_key=" + st.secrets["Zerodha_API_Key"] + ")"
-)
-st.sidebar.markdown("1. Click the link above to login via Zerodha.\n"
-                    "2. After successful login, copy the **Request Token** from the URL.\n"
-                    "3. Paste it below and click Submit.")
-request_token = st.sidebar.text_input("Paste your Request Token here")
-submit_token = st.sidebar.button("Submit Token")
+try:
+    sheet_url = "https://docs.google.com/spreadsheets/d/your-sheet-id/edit#gid=0"
+    csv_url = sheet_url.replace("/edit#gid=", "/export?format=csv&gid=")
+    df = pd.read_csv(csv_url)
 
-if submit_token and request_token:
-    st.sidebar.success("✅ Request Token submitted successfully!")
-    st.sidebar.code(request_token)
+    required_columns = [
+        "Symbol", "LTP", "% Change",
+        "15m TMV Score", "15m Trend Direction", "15m Reversal Probability",
+        "1d TMV Score", "1d Trend Direction", "1d Reversal Probability"
+    ]
+    df = df[required_columns]
 
-# === Main App Content ===
-st.title("📊 Stock Ranking Dashboard")
-df = load_background_analysis()
-if not df.empty:
-    st.dataframe(df, use_container_width=True)
-else:
-    st.warning("No data to display.")
+    def highlight_changes(val):
+        if isinstance(val, (int, float)):
+            return 'color: green' if val > 0 else 'color: red'
+        return ''
+
+    styled_df = df.style.applymap(highlight_changes, subset=["% Change", "15m TMV Score", "1d TMV Score"])
+    st.dataframe(styled_df, use_container_width=True)
+
+except Exception as e:
+    st.error(f"❌ Failed to load TMV data: {e}")
