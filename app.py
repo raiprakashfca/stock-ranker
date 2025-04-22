@@ -1,76 +1,55 @@
+
 import json
 import pandas as pd
 import streamlit as st
 import gspread
-import os
-from kiteconnect import KiteConnect
 from oauth2client.service_account import ServiceAccountCredentials
 from io import BytesIO
-from streamlit_autorefresh import st_autorefresh
+from datetime import datetime
+import pytz
 
-# Set page config
 st.set_page_config(page_title="📊 Multi-Timeframe Stock Ranking Dashboard", layout="wide")
 
-# --- SIDEBAR: Zerodha Login ---
-with st.sidebar:
-    st.header("🔐 Zerodha API Token Setup")
-    sheet_scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds_dict = json.loads(st.secrets["gspread_service_account"])
-    client = gspread.authorize(ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, sheet_scope))
+# Sidebar with login and token management
+st.sidebar.title("🔐 Zerodha API Login")
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+creds_dict = json.loads(st.secrets["gspread_service_account"])
+creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+client = gspread.authorize(creds)
+token_sheet = client.open("ZerodhaTokenStore").sheet1
 
-    token_sheet = client.open("ZerodhaTokenStore").sheet1
-    tokens = token_sheet.get_all_values()[0]
+api_key = token_sheet.cell(1, 1).value
+api_secret = token_sheet.cell(1, 2).value
 
-    api_key = tokens[0]
-    api_secret = tokens[1]
-    access_token = tokens[2] if len(tokens) > 2 else ""
+st.sidebar.text_input("API Key", value=api_key, key="api_key", disabled=True)
+st.sidebar.text_input("API Secret", value=api_secret, key="api_secret", disabled=True)
 
-    st.markdown(f"🔗 **[Click here to login](https://kite.trade/connect/login?api_key={api_key})**")
-    code_input = st.text_input("Paste Access Code")
-    if st.button("🔁 Generate Token"):
-        kite = KiteConnect(api_key=api_key)
-        try:
-            data = kite.generate_session(code_input, api_secret=api_secret)
-            new_access_token = data["access_token"]
-            token_sheet.update("A1", [[api_key, api_secret, new_access_token]])
-            st.success("✅ Access Token Updated Successfully!")
-        except Exception as e:
-            st.error(f"❌ Failed to generate token: {e}")
+redirect_url = "https://stock-ranker-prakash.streamlit.app/"
+login_url = f"https://kite.trade/connect/login?api_key={api_key}&v=3&redirect_uri={redirect_url}"
+st.sidebar.markdown(f"[🟢 Click here to login to Zerodha]({login_url})", unsafe_allow_html=True)
 
-# --- Refresh every 5 minutes ---
-st_autorefresh(interval=5 * 60 * 1000, key="auto_refresh")
+access_code = st.sidebar.text_input("🔑 Paste Access Code", type="password")
+if st.sidebar.button("Generate Token"):
+    from kiteconnect import KiteConnect
+    kite = KiteConnect(api_key=api_key)
+    data = kite.generate_session(access_code, api_secret=api_secret)
+    access_token = data["access_token"]
+    token_sheet.update("A1", [[api_key]])
+    token_sheet.update("B1", [[api_secret]])
+    token_sheet.update("C1", [[access_token]])
 
-# --- Load Live Data Sheet ---
-ltp_sheet = client.open("BackgroundAnalysisStore").sheet1
-try:
-    df = pd.DataFrame(ltp_sheet.get_all_records())
-    if df.empty:
-        st.warning("⚠️ No data found in BackgroundAnalysisStore. Please check if the cron job ran successfully.")
-        st.stop()
-except Exception as e:
-    st.error(f"❌ Failed to load Google Sheet: {e}")
-    st.stop()
+    # ✅ Update timestamp in D1
+    ist = pytz.timezone("Asia/Kolkata")
+    timestamp = datetime.now(ist).strftime("%Y-%m-%d %H:%M:%S")
+    token_sheet.update("D1", [[timestamp]])
 
-# --- Display Main Table ---
+    st.sidebar.success("✅ Token Generated and Saved! Please refresh app.")
+
+st.sidebar.markdown("---")
+st.sidebar.info("📅 Timestamp updates on every token refresh.
+
+Use the login above when token expires.")
+
+# Main placeholder
 st.title("📊 Multi-Timeframe Stock Ranking Dashboard")
-
-sort_col = st.selectbox("Sort by", ["15m TMV Score", "1d TMV Score", "% Change"])
-sort_order = st.radio("Order", ["Descending", "Ascending"]) == "Ascending"
-
-# Format columns
-df["% Change"] = df["% Change"].astype(str)
-
-# Move columns
-cols_order = ["Symbol", "LTP", "% Change"] + [col for col in df.columns if col not in ["Symbol", "LTP", "% Change"]]
-df = df[cols_order]
-
-# Sort
-df = df.sort_values(by=sort_col, ascending=sort_order)
-
-# Display
-st.dataframe(df, use_container_width=True)
-
-# Download Excel
-buffer = BytesIO()
-df.to_excel(buffer, index=False)
-st.download_button("📥 Download Excel", buffer.getvalue(), "stock_rankings.xlsx")
+st.write("✅ Sidebar now updates Zerodha token timestamp in D1 on each login.")
