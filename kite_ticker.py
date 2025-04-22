@@ -1,76 +1,89 @@
+
 import os
 import json
 import time
-import gspread
+import logging
 import pandas as pd
+import numpy as np
+import gspread
 from kiteconnect import KiteConnect, KiteTicker
 from oauth2client.service_account import ServiceAccountCredentials
+import streamlit as st
 
-# Load credentials from environment variable
-creds_dict = json.loads(os.environ["GSPREAD_CREDENTIALS_JSON"])
+logging.basicConfig(level=logging.INFO)
+
+# Load credentials from Streamlit secrets
+creds_dict = st.secrets["gspread_service_account"]
 
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
 client = gspread.authorize(creds)
 
-sheet = client.open("LiveLTPStore").sheet1
-sheet.update("A1:C1", [["Symbol", "LTP", "% Change"]])  # Ensure 3 headers
-
-# Load symbols
-symbols = [row[0] for row in sheet.get_all_values()[1:] if row[0]]
-
-# Zerodha tokens
+# Get API Key and Access Token
 token_sheet = client.open("ZerodhaTokenStore").sheet1
-tokens = token_sheet.get_all_values()[0]
-api_key, api_secret, access_token = tokens[0], tokens[1], tokens[2]
+api_key, api_secret, access_token = token_sheet.get_all_values()[0][:3]
 
 kite = KiteConnect(api_key=api_key)
 kite.set_access_token(access_token)
-ltps = {}
 
-# Get instrument tokens
-instruments = kite.instruments()
-symbol_token_map = {i["tradingsymbol"]: i["instrument_token"] for i in instruments if i["tradingsymbol"] in symbols}
+# Prepare the LTP sheet
+sheet = client.open("LiveLTPStore").sheet1
+sheet.update("A1:C1", [["Symbol", "LTP", "% Change"]])  # Update header
 
-tokens_to_subscribe = list(symbol_token_map.values())
-rev_map = {v: k for k, v in symbol_token_map.items()}
+symbols = [row[0] for row in sheet.get_all_values()[1:] if row]
+instrument_dump = kite.instruments("NSE")
+symbol_token_map = {}
+close_prices = {}
 
-# Store previous LTPs to calculate % change
-prev_ltp = {}
+for symbol in symbols:
+    try:
+        token = next(i["instrument_token"] for i in instrument_dump if i["tradingsymbol"] == symbol and i["segment"] == "NSE")
+        ltp_data = kite.ltp(f"NSE:{symbol}")
+        close = ltp_data[f"NSE:{symbol}"]["ohlc"]["close"]
+        symbol_token_map[symbol] = token
+        close_prices[symbol] = close
+    except:
+        logging.warning(f"⚠️ Skipping {symbol}: Not found in instrument dump")
+
+tokens = list(symbol_token_map.values())
+kws = KiteTicker(api_key, access_token)
+
+ltp_data = {}
 
 def on_ticks(ws, ticks):
-    global ltps
+    global ltp_data
     for tick in ticks:
-        symbol = rev_map.get(tick["instrument_token"])
-        ltp = tick["last_price"]
-        if symbol:
-            old_ltp = prev_ltp.get(symbol, ltp)
-            change = ((ltp - old_ltp) / old_ltp) * 100 if old_ltp else 0
-            ltps[symbol] = (ltp, round(change, 2))
-            prev_ltp[symbol] = ltp
+        for symbol, token in symbol_token_map.items():
+            if tick["instrument_token"] == token:
+                ltp = tick["last_price"]
+                close = close_prices.get(symbol, ltp)
+                pct = ((ltp - close) / close) * 100
+                ltp_data[symbol] = (ltp, pct)
+
+        if len(ltp_data) == len(symbol_token_map):
+            rows = [[sym, f"{ltp_data[sym][0]:.2f}", f"{ltp_data[sym][1]:.2f}%"] for sym in symbol_token_map.keys()]
+            try:
+                sheet.update("A2", rows)
+                logging.info("✅ Updated LiveLTPStore")
+            except Exception as e:
+                logging.error(f"❌ Failed to update sheet: {e}")
 
 def on_connect(ws, response):
-    ws.subscribe(tokens_to_subscribe)
+    ws.subscribe(tokens)
 
 def on_close(ws, code, reason):
-    print("WebSocket closed:", reason)
+    logging.warning(f"⚠️ Connection closed: {reason}")
 
-def write_to_sheet():
-    rows = [[s, v[0], v[1]] for s, v in ltps.items()]
-    if rows:
-        sheet.update("A2", rows)
+def on_error(ws, code, reason):
+    logging.error(f"❌ WebSocket error: {reason}")
 
-if __name__ == "__main__":
-    print("🚀 Starting Kite Ticker WebSocket...")
-    kws = KiteTicker(api_key, access_token)
-    kws.on_ticks = on_ticks
-    kws.on_connect = on_connect
-    kws.on_close = on_close
+kws.on_ticks = on_ticks
+kws.on_connect = on_connect
+kws.on_close = on_close
+kws.on_error = on_error
 
-    try:
-        kws.connect(threaded=True)
-        while True:
-            time.sleep(60)
-            write_to_sheet()
-    except Exception as e:
-        print("❌ WebSocket error:", e)
+logging.info("🚀 Starting Kite Ticker WebSocket...")
+kws.connect(threaded=True)
+
+while True:
+    time.sleep(60)
