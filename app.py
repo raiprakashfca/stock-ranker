@@ -13,9 +13,9 @@ st.set_page_config(page_title="📊 Stock Ranker", layout="wide")
 
 # Sidebar with token management
 with st.sidebar:
-    st.header("🔐 API Access")
-    st.markdown("Visit [Kite Developer](https://kite.trade/apps) to get your API keys.")
-    st.markdown("Timestamp gets auto-updated when token is refreshed.")
+    st.markdown("### 🔐 Zerodha Login")
+    login_url = f"https://kite.trade/connect/login?api_key={st.secrets['Zerodha_API_Key']}&v=3&redirect_url=https://stock-ranker-prakash.streamlit.app/"
+    st.markdown(f"[👉 Click here to Login with Zerodha]({login_url})", unsafe_allow_html=True)
     if st.button("🔄 Manual Refresh Now"):
         st.experimental_rerun()
 
