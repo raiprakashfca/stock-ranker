@@ -1,115 +1,135 @@
-import os
 import json
+import os
 import pandas as pd
 import streamlit as st
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
-from io import BytesIO
 from datetime import datetime
-from utils.zerodha import get_kite, get_stock_data
+from io import BytesIO
+from oauth2client.service_account import ServiceAccountCredentials
+from utils.zerodha import get_kite, get_stock_data, update_ltp_sheet
+from utils.indicators import calculate_scores
 from utils.sheet_logger import log_to_google_sheets
 
-st.set_page_config(page_title="📊 Multi-Timeframe Stock Ranking Dashboard", layout="wide")
+st.set_page_config(page_title="📊 Multi-Timeframe Stock Ranking", layout="wide")
 
-st.markdown("""
-<style>
-th, td { border-right: 1px solid #ddd; }
-.score-badge {
-    display: inline-block;
-    padding: 4px 10px;
-    border-radius: 8px;
-    font-weight: bold;
-    min-width: 80px;
-    text-align: center;
-}
-.high { background-color: #28a745; color: white; }
-.medium { background-color: #ffc107; color: black; }
-.low { background-color: #dc3545; color: white; }
-.direction { font-weight: bold; padding: 2px 6px; border-radius: 6px; margin-left: 6px; }
-.bullish { background-color: #c6f6d5; color: #22543d; }
-.bearish { background-color: #fed7d7; color: #742a2a; }
-.neutral { background-color: #fff3cd; color: #856404; }
-th:first-child, td:first-child {
-  position: sticky;
-  left: 0;
-  background-color: #2a2a2a;
-  z-index: 2;
-  color: #fff;
-  font-weight: bold;
-}
-</style>
-""", unsafe_allow_html=True)
+# Sidebar - Always visible with collapse option
+with st.sidebar:
+    st.header("🔐 Zerodha API Token")
+    st.markdown("Use the login link below to generate your token 👇")
+    login_url = f"https://kite.trade/connect/login?api_key={st.secrets['Zerodha_API_Key']}"
+    st.markdown(f"[🔗 Click here to login]({login_url})")
+    st.info("📅 Timestamp updates on every token refresh.")
 
-st.title("📊 Multi-Timeframe Stock Ranking Dashboard")
+# Manual Refresh Button
+if st.button("🔄 Refresh Now"):
+    st.session_state["manual_refresh"] = True
+else:
+    st.session_state["manual_refresh"] = False
 
-# Sidebar to manage token
-st.sidebar.header("🔐 Zerodha API Token Manager")
-st.sidebar.info("📅 Timestamp updates on every token refresh.")
-if "api_key" not in st.session_state or "access_token" not in st.session_state:
-    st.session_state.api_key = ""
-    st.session_state.access_token = ""
-
-# Load credentials from secrets
-creds_dict = st.secrets["gspread_service_account"]
+# Read credentials
+creds_dict = json.loads(st.secrets["gspread_service_account"])
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
 client = gspread.authorize(creds)
 
+# Update LTPs manually if button pressed
+if st.session_state["manual_refresh"]:
+    try:
+        update_ltp_sheet()
+        st.success("✅ Live prices updated on Google Sheet.")
+    except Exception as e:
+        st.error(f"❌ Failed to update LTPs: {e}")
+
+# Read LTPs from Google Sheet
+ltp_data = pd.DataFrame(client.open("LiveLTPStore").sheet1.get_all_records())
+
+# Read token from ZerodhaTokenStore
 token_sheet = client.open("ZerodhaTokenStore").sheet1
 tokens = token_sheet.get_all_values()[0]
 api_key, api_secret, access_token = tokens[0], tokens[1], tokens[2]
-st.session_state.api_key = api_key
-st.session_state.access_token = access_token
 
-# Show login link
-login_url = f"https://kite.zerodha.com/connect/login?v=3&api_key={api_key}"
-st.sidebar.markdown(f"[🔗 Click here to login and generate access token]({login_url})")
+# Save timestamp to D1
+token_sheet.update("D1", [[str(datetime.now())]])
 
-# Token input and update
-access_code = st.sidebar.text_input("Paste access token here:")
-if st.sidebar.button("🔄 Update Token"):
-    token_sheet.update("C1", access_code)
-    token_sheet.update("D1", str(datetime.now()))
-    st.success("✅ Access token updated successfully.")
-    st.rerun()
+# Init Kite
+kite = get_kite(api_key, access_token)
 
-# Read from Google Sheet
-sheet = client.open("BackgroundAnalysisStore").sheet1
-data = pd.DataFrame(sheet.get_all_records())
+# Timeframes
+TIMEFRAMES = {
+    "15m": {"interval": "15minute", "days": 5},
+    "1d": {"interval": "day", "days": 90},
+}
 
-# Format columns
-data["% Change"] = data["% Change"].apply(lambda x: f"{x:.2f}%" if isinstance(x, (int, float)) else x)
-data["LTP"] = data["LTP"].apply(lambda x: round(x, 2) if isinstance(x, (int, float)) else x)
+# Analysis
+symbols = ltp_data["Symbol"].tolist()
+all_data = []
 
-# Rearranged columns
-cols = data.columns.tolist()
-reordered_cols = ["Symbol", "LTP", "% Change"] + [col for col in cols if col not in ["Symbol", "LTP", "% Change"]]
-data = data[reordered_cols]
+with st.spinner("🔍 Analyzing..."):
+    for symbol in symbols:
+        row = {"Symbol": symbol}
+        try:
+            ltp_row = ltp_data[ltp_data["Symbol"] == symbol]
+            if not ltp_row.empty:
+                row["LTP"] = float(ltp_row.iloc[0]["LTP"])
+            for label, cfg in TIMEFRAMES.items():
+                df = get_stock_data(kite, symbol, cfg["interval"], cfg["days"])
+                if not df.empty:
+                    scores = calculate_scores(df)
+                    for key, val in scores.items():
+                        adj_key = "TMV Score" if key == "Total Score" else key
+                        row[f"{label} | {adj_key}"] = val
+            all_data.append(row)
+        except Exception as e:
+            st.warning(f"⚠️ {symbol} failed: {e}")
 
-# Sorting and filtering
-sort_col = st.selectbox("Sort by", [col for col in data.columns if "Score" in col or "Reversal" in col])
-ascending = st.radio("Order", ["Descending", "Ascending"]) == "Ascending"
-top_n = st.slider("Top N Symbols", 1, len(data), 10)
+# Build DataFrame
+df = pd.DataFrame(all_data)
+df["% Change"] = df["LTP"].pct_change().fillna(0).apply(lambda x: f"{x*100:.2f}%")
 
-data = data.sort_values(by=sort_col, ascending=ascending).head(top_n)
+# Reorder columns
+cols = df.columns.tolist()
+cols.insert(1, cols.pop(cols.index("LTP")))
+cols.insert(2, cols.pop(cols.index("% Change")))
+df = df[cols]
 
-# Highlight logic
-def highlight_row(row):
-    bullish = row["15m Trend Direction"] == "Bullish" and row["1d Trend Direction"] == "Bullish"
-    bearish = row["15m Trend Direction"] == "Bearish" and row["1d Trend Direction"] == "Bearish"
-    high_score = row["15m TMV Score"] >= 0.8 and row["1d TMV Score"] >= 0.8
+# Highlight rules
+highlight_green = (
+    (df[["15m | Trend Direction", "1d | Trend Direction"]] == "Bullish").all(axis=1) &
+    (df[["15m | TMV Score", "1d | TMV Score"]] >= 0.8).all(axis=1)
+)
+highlight_red = (
+    (df[["15m | Trend Direction", "1d | Trend Direction"]] == "Bearish").all(axis=1) &
+    (df[["15m | TMV Score", "1d | TMV Score"]] >= 0.8).all(axis=1)
+)
 
-    if bullish and high_score:
-        return ['background-color: #d4edda; color: black'] * len(row)
-    elif bearish and high_score:
-        return ['background-color: #f8d7da; color: black'] * len(row)
-    else:
-        return [''] * len(row)
+def highlight(row):
+    color = ""
+    if highlight_green.loc[row.name]:
+        color = "background-color: #d4edda; color: black"
+    elif highlight_red.loc[row.name]:
+        color = "background-color: #f8d7da; color: black"
+    return [color] * len(row)
 
-styled = data.style.apply(highlight_row, axis=1)
-st.dataframe(styled, use_container_width=True, hide_index=False)
+styled_df = df.style.apply(highlight, axis=1)
+
+# Sort + Filter UI
+sort_col = st.selectbox("Sort by", [col for col in df.columns if "Score" in col or "Reversal" in col])
+sort_order = st.radio("Order", ["Descending", "Ascending"]) == "Ascending"
+limit = st.slider("Top N Symbols", 1, len(df), 10)
+
+df = df.sort_values(by=sort_col, ascending=sort_order).head(limit)
+
+# Show
+st.dataframe(df.style.apply(highlight, axis=1), use_container_width=True, hide_index=True)
 
 # Download
-buffer = BytesIO()
-data.to_excel(buffer, index=False)
-st.download_button("📥 Download Excel", buffer.getvalue(), file_name="stock_rankings.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+excel = BytesIO()
+df.to_excel(excel, index=False)
+st.download_button("📥 Download Excel", excel.getvalue(), "stock_rankings.xlsx")
+
+# Log to Sheet
+try:
+    log_to_google_sheets(sheet_name="Combined", df=df)
+    st.success("✅ Data saved to Google Sheet.")
+except Exception as e:
+    st.warning(f"⚠️ Could not update Google Sheet: {e}")
