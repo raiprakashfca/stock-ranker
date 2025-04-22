@@ -1,85 +1,76 @@
 import json
 import pandas as pd
 import streamlit as st
-from io import BytesIO
 import gspread
+import os
+from kiteconnect import KiteConnect
 from oauth2client.service_account import ServiceAccountCredentials
+from io import BytesIO
+from streamlit_autorefresh import st_autorefresh
 
-# App configuration
+# Set page config
 st.set_page_config(page_title="📊 Multi-Timeframe Stock Ranking Dashboard", layout="wide")
 
-# Sidebar toggle
-if "sidebar_visible" not in st.session_state:
-    st.session_state.sidebar_visible = True
-
-def toggle_sidebar():
-    st.session_state.sidebar_visible = not st.session_state.sidebar_visible
-
+# --- SIDEBAR: Zerodha Login ---
 with st.sidebar:
-    st.button("👁️ Toggle Sidebar", on_click=toggle_sidebar)
-    if st.session_state.sidebar_visible:
-        st.markdown("### Settings")
-        st.markdown("Sidebar remains visible unless manually toggled.")
+    st.header("🔐 Zerodha API Token Setup")
+    sheet_scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    creds_dict = json.loads(st.secrets["gspread_service_account"])
+    client = gspread.authorize(ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, sheet_scope))
 
-# Google Sheets Auth
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds_dict = json.loads(st.secrets["gspread_service_account"])
-creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-client = gspread.authorize(creds)
+    token_sheet = client.open("ZerodhaTokenStore").sheet1
+    tokens = token_sheet.get_all_values()[0]
 
-sheet = client.open("BackgroundAnalysisStore").sheet1
-data = sheet.get_all_records()
-df = pd.DataFrame(data)
+    api_key = tokens[0]
+    api_secret = tokens[1]
+    access_token = tokens[2] if len(tokens) > 2 else ""
 
-if df.empty:
-    st.warning("🚨 No data available in BackgroundAnalysisStore.")
+    st.markdown(f"🔗 **[Click here to login](https://kite.trade/connect/login?api_key={api_key})**")
+    code_input = st.text_input("Paste Access Code")
+    if st.button("🔁 Generate Token"):
+        kite = KiteConnect(api_key=api_key)
+        try:
+            data = kite.generate_session(code_input, api_secret=api_secret)
+            new_access_token = data["access_token"]
+            token_sheet.update("A1", [[api_key, api_secret, new_access_token]])
+            st.success("✅ Access Token Updated Successfully!")
+        except Exception as e:
+            st.error(f"❌ Failed to generate token: {e}")
+
+# --- Refresh every 5 minutes ---
+st_autorefresh(interval=5 * 60 * 1000, key="auto_refresh")
+
+# --- Load Live Data Sheet ---
+ltp_sheet = client.open("BackgroundAnalysisStore").sheet1
+try:
+    df = pd.DataFrame(ltp_sheet.get_all_records())
+    if df.empty:
+        st.warning("⚠️ No data found in BackgroundAnalysisStore. Please check if the cron job ran successfully.")
+        st.stop()
+except Exception as e:
+    st.error(f"❌ Failed to load Google Sheet: {e}")
     st.stop()
 
-# Ensure correct dtypes
-df["LTP"] = pd.to_numeric(df["LTP"], errors="coerce")
-df["% Change"] = df["% Change"].str.replace("%", "").astype(float)
+# --- Display Main Table ---
+st.title("📊 Multi-Timeframe Stock Ranking Dashboard")
 
-# Sorting
-sort_col = st.selectbox("Sort by", df.columns, index=3)
-ascending = st.radio("Sort Order", ["Descending", "Ascending"]) == "Ascending"
-top_n = st.slider("Top N Rows", 5, len(df), 20)
+sort_col = st.selectbox("Sort by", ["15m TMV Score", "1d TMV Score", "% Change"])
+sort_order = st.radio("Order", ["Descending", "Ascending"]) == "Ascending"
 
-# Filter top rows
-df = df.sort_values(by=sort_col, ascending=ascending).head(top_n)
+# Format columns
+df["% Change"] = df["% Change"].astype(str)
 
-# Highlight rules
-def highlight(row):
-    if (
-        row["15m Trend Direction"] == "Bullish"
-        and row["1d Trend Direction"] == "Bullish"
-        and row["15m TMV Score"] >= 0.8
-        and row["1d TMV Score"] >= 0.8
-    ):
-        return ["background-color: #d4edda"] * len(row)
-    elif (
-        row["15m Trend Direction"] == "Bearish"
-        and row["1d Trend Direction"] == "Bearish"
-        and row["15m TMV Score"] >= 0.8
-        and row["1d TMV Score"] >= 0.8
-    ):
-        return ["background-color: #f8d7da"] * len(row)
-    else:
-        return [""] * len(row)
+# Move columns
+cols_order = ["Symbol", "LTP", "% Change"] + [col for col in df.columns if col not in ["Symbol", "LTP", "% Change"]]
+df = df[cols_order]
 
-# Column order
-columns = ["Symbol", "LTP", "% Change",
-           "15m TMV Score", "15m Trend Direction", "15m Reversal Probability",
-           "1d TMV Score", "1d Trend Direction", "1d Reversal Probability"]
-df = df[columns]
-
-# Apply highlighting
-styled = df.style.apply(highlight, axis=1).format("{:.2f}", subset=["LTP", "% Change", "15m TMV Score", "1d TMV Score", "15m Reversal Probability", "1d Reversal Probability"])
+# Sort
+df = df.sort_values(by=sort_col, ascending=sort_order)
 
 # Display
-st.markdown("### 📈 Stock Scores (Live View from Background Sheet)")
-st.dataframe(styled, use_container_width=True)
+st.dataframe(df, use_container_width=True)
 
-# Export
+# Download Excel
 buffer = BytesIO()
 df.to_excel(buffer, index=False)
-st.download_button("📥 Download Excel", buffer.getvalue(), "stock_ranking.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+st.download_button("📥 Download Excel", buffer.getvalue(), "stock_rankings.xlsx")
