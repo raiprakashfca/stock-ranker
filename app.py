@@ -1,39 +1,56 @@
+
 import streamlit as st
 import pandas as pd
 import gspread
+from google.oauth2.service_account import Credentials
 from gspread_dataframe import get_as_dataframe
-from oauth2client.service_account import ServiceAccountCredentials
+from datetime import datetime
 
-st.set_page_config(page_title="📈 TMV Stock Ranker", layout="wide")
+# Sidebar for Zerodha Token (only if missing in secrets)
+if "Access_Token" not in st.secrets:
+    st.sidebar.markdown("### 🔐 Zerodha Access Token")
+    access_token_input = st.sidebar.text_input("Paste Access Token")
+    if st.sidebar.button("Save Token"):
+        st.warning("⚠️ This feature works only in local dev mode. On Streamlit Cloud, token must be saved to Google Sheet.")
+else:
+    st.sidebar.success("✅ Zerodha Token loaded from secrets")
 
-# Function to load background analysis sheet
+# Load credentials and access the Google Sheet
+def get_gsheet_client():
+    try:
+        credentials_dict = st.secrets["gcp_service_account"]
+        credentials = Credentials.from_service_account_info(credentials_dict)
+        client = gspread.authorize(credentials)
+        return client
+    except Exception as e:
+        st.error(f"❌ Failed to authenticate Google Sheets: {e}")
+        return None
+
 @st.cache_data(ttl=60)
 def load_background_analysis():
     try:
-        creds_dict = st.secrets["gcp_service_account"]
-        client = gspread.service_account_from_dict(creds_dict)
+        client = get_gsheet_client()
+        if client is None:
+            return pd.DataFrame()
         sheet = client.open("BackgroundAnalysisStore")
-        ws = sheet.worksheet("LiveScores")  # Make sure this name is correct
+        ws = sheet.worksheet("LiveScores")
         df = pd.DataFrame(ws.get_all_records())
         return df
     except Exception as e:
         st.error(f"❌ Failed to load data from Google Sheet: {e}")
         return pd.DataFrame()
 
-# Load data
+# Main App
+st.title("📊 Stock Ranking Dashboard")
+
 df = load_background_analysis()
 
 if df.empty:
-    st.warning("No data available.")
+    st.warning("No data to display yet.")
 else:
-    # Move LTP and % Change columns next to Symbol
-    symbol_col = df.pop("Symbol")
-    ltp_col = df.pop("LTP")
-    pct_col = df.pop("% Change")
-    df.insert(0, "Symbol", symbol_col)
-    df.insert(1, "LTP", ltp_col)
-    df.insert(2, "% Change", pct_col)
-
-    # Display the data in Streamlit
-    st.title("📊 TMV Stock Ranking Dashboard")
-    st.dataframe(df, use_container_width=True)
+    df_display = df.copy()
+    df_display["% Change"] = df_display["% Change"].map(lambda x: f"{x:.2f}%" if isinstance(x, (float, int)) else x)
+    st.dataframe(df_display.style.applymap(
+        lambda v: 'color: green;' if isinstance(v, str) and v.endswith('%') and float(v[:-1]) > 0 else (
+                  'color: red;' if isinstance(v, str) and v.endswith('%') and float(v[:-1]) < 0 else '')
+    , subset=["% Change"]))
