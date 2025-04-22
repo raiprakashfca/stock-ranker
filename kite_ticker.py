@@ -1,87 +1,76 @@
-
 import os
 import json
 import time
-import logging
+import gspread
 import pandas as pd
 from kiteconnect import KiteConnect, KiteTicker
-import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-
-logging.basicConfig(level=logging.INFO)
 
 # Load credentials from environment variable
 creds_dict = json.loads(os.environ["GSPREAD_CREDENTIALS_JSON"])
+
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
 client = gspread.authorize(creds)
 
-# Zerodha credentials from Google Sheet
+sheet = client.open("LiveLTPStore").sheet1
+sheet.update("A1:C1", [["Symbol", "LTP", "% Change"]])  # Ensure 3 headers
+
+# Load symbols
+symbols = [row[0] for row in sheet.get_all_values()[1:] if row[0]]
+
+# Zerodha tokens
 token_sheet = client.open("ZerodhaTokenStore").sheet1
-tokens = token_sheet.get_all_values()[0][:3]
-api_key, api_secret, access_token = tokens
+tokens = token_sheet.get_all_values()[0]
+api_key, api_secret, access_token = tokens[0], tokens[1], tokens[2]
 
 kite = KiteConnect(api_key=api_key)
 kite.set_access_token(access_token)
-kws = KiteTicker(api_key, access_token)
+ltps = {}
 
-# Read instruments from Google Sheet
-sheet = client.open("LiveLTPStore").sheet1
-df = pd.DataFrame(sheet.get_all_records())
+# Get instrument tokens
+instruments = kite.instruments()
+symbol_token_map = {i["tradingsymbol"]: i["instrument_token"] for i in instruments if i["tradingsymbol"] in symbols}
 
-instrument_tokens = []
-symbol_map = {}
+tokens_to_subscribe = list(symbol_token_map.values())
+rev_map = {v: k for k, v in symbol_token_map.items()}
 
-all_instruments = pd.DataFrame(kite.instruments("NSE"))
-
-for symbol in df["Symbol"]:
-    match = all_instruments[all_instruments["tradingsymbol"] == symbol]
-    if not match.empty:
-        token = int(match.iloc[0]["instrument_token"])
-        instrument_tokens.append(token)
-        symbol_map[token] = symbol
-    else:
-        logging.warning(f"⚠️ Instrument not found for {symbol}")
-
-prices = {}
+# Store previous LTPs to calculate % change
+prev_ltp = {}
 
 def on_ticks(ws, ticks):
+    global ltps
     for tick in ticks:
-        token = tick["instrument_token"]
-        last_price = tick["last_price"]
-        symbol = symbol_map.get(token)
+        symbol = rev_map.get(tick["instrument_token"])
+        ltp = tick["last_price"]
         if symbol:
-            prices[symbol] = last_price
-    update_sheet()
-
-def update_sheet():
-    current_data = sheet.get_all_records()
-    updated_rows = []
-    for row in current_data:
-        symbol = row["Symbol"]
-        old_price = row["LTP"]
-        new_price = prices.get(symbol, old_price)
-        change = ((new_price - old_price) / old_price) * 100 if old_price else 0
-        updated_rows.append([symbol, round(new_price, 2), f"{change:.2f}%"])
-
-    sheet.update("A1:C1", [["Symbol", "LTP", "% Change"]])
-    sheet.update("A2", updated_rows)
-    logging.info("✅ Sheet updated")
+            old_ltp = prev_ltp.get(symbol, ltp)
+            change = ((ltp - old_ltp) / old_ltp) * 100 if old_ltp else 0
+            ltps[symbol] = (ltp, round(change, 2))
+            prev_ltp[symbol] = ltp
 
 def on_connect(ws, response):
-    logging.info("✅ WebSocket connected")
-    ws.subscribe(instrument_tokens)
+    ws.subscribe(tokens_to_subscribe)
 
 def on_close(ws, code, reason):
-    logging.warning(f"⚠️ Connection closed: {reason}")
+    print("WebSocket closed:", reason)
 
-def on_error(ws, code, reason):
-    logging.error(f"❌ WebSocket error: {reason}")
+def write_to_sheet():
+    rows = [[s, v[0], v[1]] for s, v in ltps.items()]
+    if rows:
+        sheet.update("A2", rows)
 
-kws.on_ticks = on_ticks
-kws.on_connect = on_connect
-kws.on_close = on_close
-kws.on_error = on_error
+if __name__ == "__main__":
+    print("🚀 Starting Kite Ticker WebSocket...")
+    kws = KiteTicker(api_key, access_token)
+    kws.on_ticks = on_ticks
+    kws.on_connect = on_connect
+    kws.on_close = on_close
 
-logging.info("🚀 Starting Kite Ticker WebSocket...")
-kws.connect(threaded=False)
+    try:
+        kws.connect(threaded=True)
+        while True:
+            time.sleep(60)
+            write_to_sheet()
+    except Exception as e:
+        print("❌ WebSocket error:", e)
