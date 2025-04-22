@@ -1,69 +1,79 @@
-# 📊 Multi-Timeframe Stock Ranking Dashboard (final integrated version)
-import streamlit as st
-import pandas as pd
-import json
-import base64
-import gspread
 import os
+import json
+import time
+import pandas as pd
+import streamlit as st
+import gspread
 from datetime import datetime
 from oauth2client.service_account import ServiceAccountCredentials
-from io import BytesIO
+from utils.zerodha import get_kite, get_stock_data, update_ltp_sheet
+from utils.indicators import calculate_scores
+from utils.sheet_logger import log_to_google_sheets
+from streamlit_autorefresh import st_autorefresh
 
-st.set_page_config(page_title="📊 Stock Ranker", layout="wide")
+st.set_page_config(page_title="📊 Multi-Timeframe Stock Ranking Dashboard", layout="wide")
 
-# Sidebar with token management
+st_autorefresh(interval=5 * 60 * 1000, key="auto_refresh")
+
+# Sidebar with token info
 with st.sidebar:
-    st.markdown("### 🔐 Zerodha Login")
-    login_url = f"https://kite.trade/connect/login?api_key={st.secrets['Zerodha_API_Key']}&v=3&redirect_url=https://stock-ranker-prakash.streamlit.app/"
-    st.markdown(f"[👉 Click here to Login with Zerodha]({login_url})", unsafe_allow_html=True)
-    if st.button("🔄 Manual Refresh Now"):
+    st.title("🔑 Zerodha API Login")
+    try:
+        login_url = f"https://kite.trade/connect/login?api_key={st.secrets['Zerodha_API_Key']}"
+        st.markdown(f"[Click here to login to Zerodha]({login_url})", unsafe_allow_html=True)
+        st.info("📅 Timestamp updates on every token refresh.")
+    except Exception as e:
+        st.warning("⚠️ Could not create login link. Check secrets config.")
+
+    if st.button("🔄 Refresh Now"):
+        update_ltp_sheet()
         st.experimental_rerun()
 
-# Load Google Sheet credentials from Streamlit secrets
-creds_dict = json.loads(st.secrets["gspread_service_account"])
+# Load Google Sheet credentials
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+creds_dict = st.secrets["gspread_service_account"]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
 client = gspread.authorize(creds)
 
-# Load data from BackgroundAnalysisStore
+# Read stock data from BackgroundAnalysisStore
 sheet = client.open("BackgroundAnalysisStore").sheet1
-data = sheet.get_values()
-headers = data[0]
-values = data[1:]
+data = pd.DataFrame(sheet.get_all_records())
 
-df = pd.DataFrame(values, columns=headers)
+# Ensure LTP and % Change are right after Symbol
+cols = list(data.columns)
+ltp_index = cols.index("Symbol") + 1
+ltp_col = cols.pop(cols.index("LTP"))
+change_col = cols.pop(cols.index("% Change"))
+cols.insert(ltp_index, "LTP")
+cols.insert(ltp_index + 1, "% Change")
+data = data[cols]
 
-# Convert numeric columns
-numeric_cols = ["LTP", "% Change", "15m TMV Score", "15m Reversal Probability", "1d TMV Score", "1d Reversal Probability"]
-for col in numeric_cols:
-    df[col] = pd.to_numeric(df[col], errors='coerce')
+# Display sorting options
+sort_column = st.selectbox("📊 Sort by", [col for col in data.columns if "Score" in col or "Reversal" in col])
+sort_order = st.radio("⬆️⬇️ Order", ["Descending", "Ascending"]) == "Ascending"
+limit = st.slider("🔢 Top N Symbols", 1, len(data), min(10, len(data)))
 
-# Sort and filter
-with st.sidebar:
-    sort_by = st.selectbox("📊 Sort By", ["15m TMV Score", "1d TMV Score", "% Change"])
-    ascending = st.checkbox("⬆️ Sort Ascending", value=False)
-    top_n = st.slider("🔢 Show Top N Rows", 1, len(df), 15)
+# Sorting and limiting
+data = data.sort_values(by=sort_column, ascending=sort_order).head(limit)
 
-df = df.sort_values(by=sort_by, ascending=ascending).head(top_n)
-
-# Highlight logic
-def highlight_row(row):
-    bullish = row["15m Trend Direction"] == "Bullish" and row["1d Trend Direction"] == "Bullish"
-    bearish = row["15m Trend Direction"] == "Bearish" and row["1d Trend Direction"] == "Bearish"
-    high_score = row["15m TMV Score"] >= 0.8 and row["1d TMV Score"] >= 0.8
-    if bullish and high_score:
+# Highlight rules
+def highlight_rows(row):
+    if (
+        row["15m Trend Direction"] == "Bullish"
+        and row["1d Trend Direction"] == "Bullish"
+        and row["15m TMV Score"] >= 0.8
+        and row["1d TMV Score"] >= 0.8
+    ):
         return ["background-color: #d4edda; color: black"] * len(row)
-    elif bearish and high_score:
+    elif (
+        row["15m Trend Direction"] == "Bearish"
+        and row["1d Trend Direction"] == "Bearish"
+        and row["15m TMV Score"] >= 0.8
+        and row["1d TMV Score"] >= 0.8
+    ):
         return ["background-color: #f8d7da; color: black"] * len(row)
-    return [""] * len(row)
+    else:
+        return [""] * len(row)
 
-styled_df = df.style.apply(highlight_row, axis=1)
-
-# Display
-st.title("📈 Stock Ranking Dashboard")
-st.dataframe(styled_df, use_container_width=True, hide_index=True)
-
-# Excel Export
-excel_buffer = BytesIO()
-df.to_excel(excel_buffer, index=False)
-st.download_button("📥 Download Excel", data=excel_buffer.getvalue(), file_name="stock_rankings.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+styled = data.style.apply(highlight_rows, axis=1)
+st.dataframe(styled, use_container_width=True)
