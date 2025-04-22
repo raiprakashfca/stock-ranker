@@ -1,55 +1,40 @@
-
 import streamlit as st
 import pandas as pd
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+from google.oauth2 import service_account
 from datetime import datetime
 from gspread_dataframe import get_as_dataframe
-from google.oauth2.service_account import Credentials
 
-st.set_page_config(page_title="📊 TMV Scoreboard", layout="wide")
+st.set_page_config(page_title="📊 Stock Ranker", layout="wide")
 
-# Load credentials and connect to Google Sheets
-def get_worksheet(sheet_name: str):
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/spreadsheets",
-             "https://www.googleapis.com/auth/drive.file", "https://www.googleapis.com/auth/drive"]
-    credentials_dict = dict(st.secrets["gcp_service_account"])
-    credentials = Credentials.from_service_account_info(credentials_dict, scopes=scope)
-    gc = gspread.authorize(credentials)
-    sheet = gc.open(sheet_name)
-    return sheet
-
-@st.cache_data(ttl=60)
+@st.cache_data
 def load_background_analysis():
-    sheet = get_worksheet("BackgroundAnalysisStore")
-    ws = sheet.sheet1
-    df = pd.DataFrame(ws.get_all_records())
-    return df
+    try:
+        creds_dict = st.secrets["gcp_service_account"]
+        creds = service_account.Credentials.from_service_account_info(creds_dict)
+        gc = gspread.authorize(creds)
 
-# Main app
-st.title("📊 Multi-Timeframe Stock Ranking Dashboard")
+        st.write("✅ Connected to Google Sheets")
+
+        # Debug print sheet names
+        sh = gc.open("BackgroundAnalysisStore")
+        st.write("📄 Sheet Title:", sh.title)
+
+        # List all worksheets for sanity check
+        all_tabs = [ws.title for ws in sh.worksheets()]
+        st.write("📑 Available Tabs:", all_tabs)
+
+        ws = sh.worksheet("LiveScores")  # Ensure this matches exactly
+        df = pd.DataFrame(ws.get_all_records())
+        return df
+
+    except Exception as e:
+        st.error(f"❌ Failed to load data from Google Sheet: {e}")
+        return pd.DataFrame()
 
 df = load_background_analysis()
 
-if df.empty:
-    st.warning("No data found.")
+if not df.empty:
+    st.dataframe(df)
 else:
-    # Reorder columns
-    desired_order = ["Symbol", "LTP", "% Change"] + [col for col in df.columns if col not in ["Symbol", "LTP", "% Change"]]
-    df = df[desired_order]
-
-    # Styling
-    def highlight_change(val):
-        try:
-            val = float(val)
-            color = 'green' if val > 0 else 'red'
-            return f'color: {color}'
-        except:
-            return ''
-
-    st.dataframe(
-        df.style
-        .applymap(highlight_change, subset=["% Change"])
-        .format({"LTP": "{:.2f}", "% Change": "{:.2f}"}),
-        use_container_width=True
-    )
+    st.warning("No data found in the sheet.")
