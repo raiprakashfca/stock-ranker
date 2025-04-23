@@ -9,6 +9,9 @@ import pandas_ta as ta
 from fpdf import FPDF
 import base64
 from fetch_ohlc import fetch_ohlc_data, calculate_indicators
+from streamlit_autorefresh import st_autorefresh
+
+st_autorefresh(interval=60000, key="refresh")  # 60,000 ms = 1 minute
 
 st.set_page_config(page_title="📊 TMV Stock Ranking", layout="wide")
 
