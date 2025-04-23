@@ -11,3 +11,4 @@ websocket-client
 streamlit-autorefresh
 gspread-dataframe
 matplotlib
+fpdf
