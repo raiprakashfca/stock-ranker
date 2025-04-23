@@ -26,6 +26,12 @@ def fetch_ohlc_data(symbol: str, interval: str, duration_days: int):
     kite = get_kite_client()
     instrument_token = kite.ltp([f"NSE:{symbol}"])[f"NSE:{symbol}"]["instrument_token"]
 
+    # Extended window to improve indicator reliability
+    if interval == "15minute":
+        duration_days = 7
+    elif interval == "day":
+        duration_days = 90
+
     end_date = datetime.now()
     start_date = end_date - timedelta(days=duration_days)
 
@@ -35,12 +41,17 @@ def fetch_ohlc_data(symbol: str, interval: str, duration_days: int):
     return df
 
 def calculate_indicators(df):
-    return {
-        "EMA_8": df.ta.ema(length=8).iloc[-1],
-        "EMA_21": df.ta.ema(length=21).iloc[-1],
-        "RSI": df.ta.rsi(length=14).iloc[-1],
-        "MACD": df.ta.macd().iloc[-1]["MACD_12_26_9"],
-        "ADX": df.ta.adx().iloc[-1]["ADX_14"],
-        "OBV": df.ta.obv().iloc[-1],
-        "MFI": df.ta.mfi().iloc[-1]
-    }
+    try:
+        macd = df.ta.macd()
+        adx = df.ta.adx()
+        return {
+            "EMA_8": df.ta.ema(length=8).iloc[-1],
+            "EMA_21": df.ta.ema(length=21).iloc[-1],
+            "RSI": df.ta.rsi(length=14).iloc[-1],
+            "MACD": macd["MACD_12_26_9"].iloc[-1] if "MACD_12_26_9" in macd.columns else None,
+            "ADX": adx["ADX_14"].iloc[-1] if "ADX_14" in adx.columns else None,
+            "OBV": df.ta.obv().iloc[-1],
+            "MFI": df.ta.mfi().iloc[-1]
+        }
+    except Exception as e:
+        return {"Error": str(e)}
