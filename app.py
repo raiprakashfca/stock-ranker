@@ -41,8 +41,8 @@ with st.sidebar.expander("🔐 Zerodha Token Generator", expanded=False):
 st.title("📈 Multi-Timeframe TMV Stock Ranking Dashboard")
 
 try:
-    sheet_url = "https://docs.google.com/spreadsheets/d/your-sheet-id/edit#gid=0"
-    csv_url = sheet_url.replace("/edit#gid=", "/export?format=csv&gid=")
+    # Fixed export URL from provided Google Sheet
+    csv_url = "https://docs.google.com/spreadsheets/d/1Cpgj1M_ofN1SqvuqDDHuN7Gy17tfkhy4fCCP8Mx7bRI/export?format=csv&gid=0"
     df = pd.read_csv(csv_url)
 
     required_columns = [
