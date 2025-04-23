@@ -112,11 +112,38 @@ df = df[[
             ind_15m = calculate_indicators(df_15m)
             ind_1d = calculate_indicators(df_1d)
 
-            with st.expander("📊 15m TMV Input Components"):
-                st.json(ind_15m)
+            with st.expander("📊 15m TMV Input Components (with meaning)"):
+    st.markdown("### 📘 Indicator Breakdown (15m)")
+    indicator_descriptions = {
+        "EMA_8": "Exponential Moving Average over 8 periods — gives more weight to recent prices. Helps detect short-term trends.",
+        "EMA_21": "Exponential Moving Average over 21 periods — used to identify medium-term trend direction.",
+        "RSI": "Relative Strength Index — momentum oscillator. Values >70 suggest overbought; <30 suggest oversold.",
+        "MACD": "Moving Average Convergence Divergence — trend-following momentum indicator. A rising MACD suggests bullish momentum.",
+        "ADX": "Average Directional Index — strength of the trend. ADX > 25 indicates a strong trend.",
+        "OBV": "On-Balance Volume — volume-based trend confirmation. Rising OBV with rising price confirms uptrend.",
+        "MFI": "Money Flow Index — RSI + volume. Measures buying/selling pressure. High = overbought, low = oversold."
+    }
 
-            with st.expander("📊 1d TMV Input Components"):
-                st.json(ind_1d)
+    for key, value in ind_15m.items():
+        desc = indicator_descriptions.get(key, "No description available.")
+        st.markdown(f"**{key}: {round(value, 2) if isinstance(value, (float, int)) else value}**  \n*{desc}*")
+
+
+            with st.expander("📊 1d TMV Input Components (with meaning)"):
+    st.markdown("### 📘 Indicator Breakdown (1d)")
+    indicator_descriptions = {
+        "EMA_8": "Exponential Moving Average over 8 periods — gives more weight to recent prices. Helps detect short-term trends.",
+        "EMA_21": "Exponential Moving Average over 21 periods — used to identify medium-term trend direction.",
+        "RSI": "Relative Strength Index — momentum oscillator. Values >70 suggest overbought; <30 suggest oversold.",
+        "MACD": "Moving Average Convergence Divergence — trend-following momentum indicator. A rising MACD suggests bullish momentum.",
+        "ADX": "Average Directional Index — strength of the trend. ADX > 25 indicates a strong trend.",
+        "OBV": "On-Balance Volume — volume-based trend confirmation. Rising OBV with rising price confirms uptrend.",
+        "MFI": "Money Flow Index — RSI + volume. Measures buying/selling pressure. High = overbought, low = oversold."
+    }
+
+    for key, value in ind_1d.items():
+        desc = indicator_descriptions.get(key, "No description available.")
+        st.markdown(f"**{key}: {round(value, 2) if isinstance(value, (float, int)) else value}**  \n*{desc}*")
 
             df_15m["EMA_8"] = df_15m.ta.ema(length=8)
             df_15m["EMA_21"] = df_15m.ta.ema(length=21)
