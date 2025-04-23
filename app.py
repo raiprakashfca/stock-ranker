@@ -24,6 +24,7 @@ client = gspread.authorize(credentials)
 token_sheet = client.open("ZerodhaTokenStore").worksheet("Sheet1")
 api_key = token_sheet.acell("A1").value
 api_secret = token_sheet.acell("B1").value
+access_token = token_sheet.acell("C1").value
 
 # Sidebar token generator
 with st.sidebar.expander("🔐 Zerodha Token Generator", expanded=False):
@@ -40,6 +41,16 @@ with st.sidebar.expander("🔐 Zerodha Token Generator", expanded=False):
             st.success("✅ Access Token saved successfully.")
         except Exception as e:
             st.error(f"❌ Failed to generate access token: {e}")
+
+# Validate token before proceeding
+try:
+    kite = KiteConnect(api_key=api_key)
+    kite.set_access_token(access_token)
+    profile = kite.profile()
+    st.sidebar.success(f"🔐 Token verified: {profile['user_name']} ({profile['user_id']})")
+except Exception as e:
+    st.sidebar.error(f"❌ Token verification failed: {e}")
+    st.stop()
 
 # Load main stock data
 st.title("📈 Multi-Timeframe TMV Stock Ranking Dashboard")
@@ -68,7 +79,6 @@ try:
             st.markdown("#### 📊 1d Indicators")
             st.json(ind_1d)
 
-            # Chart preview
             df_15m["EMA_8"] = df_15m.ta.ema(length=8)
             df_15m["EMA_21"] = df_15m.ta.ema(length=21)
             fig, ax = plt.subplots()
@@ -102,6 +112,6 @@ try:
             st.markdown(f"🔗 Shareable Link: [Copy and Share]({share_url})")
 
         except Exception as e:
-            st.error(f"❌ Error fetching indicators: {e}")
+            st.error(f"❌ Error fetching indicators for {selected_stock}: {e}")
 except Exception as e:
     st.error(f"❌ Failed to load TMV data: {e}")
