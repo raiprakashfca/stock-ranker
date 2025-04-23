@@ -61,7 +61,8 @@ st.title("📈 Multi-Timeframe TMV Stock Ranking Dashboard")
 try:
     csv_url = "https://docs.google.com/spreadsheets/d/1Cpgj1M_ofN1SqvuqDDHuN7Gy17tfkhy4fCCP8Mx7bRI/export?format=csv&gid=0"
 
-# Auto-refresh every 5 minutes
+
+# ✅ Countdown + Auto-Refresh block (OUTSIDE the try)
 countdown_sec = 300
 last_refresh = st.session_state.get("last_refresh_time", time.time())
 next_refresh = last_refresh + countdown_sec
@@ -69,10 +70,29 @@ remaining = int(max(0, next_refresh - time.time()))
 st.session_state["last_refresh_time"] = time.time()
 
 st_autorefresh(interval=countdown_sec * 1000, key="tmv_refresh")
-
 st.markdown("### ⏱ Auto-Refresh Countdown")
 st.info(f"🔄 This table auto-refreshes every 5 minutes.\n\n⏳ **Next refresh in `{remaining}` seconds**.")
 
+# ✅ Data load wrapped in try block
+try:
+    csv_url = "https://docs.google.com/spreadsheets/d/1Cpgj1M_ofN1SqvuqDDHuN7Gy17tfkhy4fCCP8Mx7bRI/export?format=csv&gid=0"
+    df = pd.read_csv(csv_url)
+
+    df["15m TMV Inputs"] = "Click to expand"
+    df["1d TMV Inputs"] = "Click to expand"
+    df["Explanation"] = "Click to explain"
+
+    df = df[[
+        "Symbol", "LTP", "% Change",
+        "15m TMV Inputs", "15m TMV Score", "15m Trend Direction", "15m Reversal Probability",
+        "1d TMV Inputs", "1d TMV Score", "1d Trend Direction", "1d Reversal Probability",
+        "Explanation"
+    ]]
+
+    st.dataframe(df, use_container_width=True)
+    
+except Exception as e:
+    st.error(f"❌ Failed to load TMV data: {e}")
 
 df = pd.read_csv(csv_url)
     df["Explanation"] = "Click to explain"
