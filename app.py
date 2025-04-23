@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import gspread
@@ -77,7 +78,6 @@ countdown_html = f"""
   }}, 1000);
 </script>
 """
-
 components.html(countdown_html, height=100)
 
 # TMV Table & Explainer
@@ -85,19 +85,21 @@ st.title("📈 Multi-Timeframe TMV Stock Ranking Dashboard")
 try:
     csv_url = "https://docs.google.com/spreadsheets/d/1Cpgj1M_ofN1SqvuqDDHuN7Gy17tfkhy4fCCP8Mx7bRI/export?format=csv&gid=0"
     df = pd.read_csv(csv_url)
+
     df = df[[
         "Symbol", "LTP", "% Change",
         "15m TMV Score", "15m Trend Direction", "15m Reversal Probability",
         "1d TMV Score", "1d Trend Direction", "1d Reversal Probability"
     ]]
 
+    # Always add TATAPOWER if missing
+    if "TATAPOWER" not in df["Symbol"].values:
+        df = pd.concat([df, pd.DataFrame([{"Symbol": "TATAPOWER"}])], ignore_index=True)
+
     st.dataframe(df, use_container_width=True)
 
     st.markdown("---")
     st.subheader("📘 TMV Explainer")
-    
-if "TATAPOWER" not in df["Symbol"].values:
-    df = pd.concat([df, pd.DataFrame([{"Symbol": "TATAPOWER"}])], ignore_index=True)
 
     selected_stock = st.selectbox("Select a stock to generate explanation", df["Symbol"].unique())
     if selected_stock:
@@ -122,22 +124,15 @@ if "TATAPOWER" not in df["Symbol"].values:
                 }
                 for key, value in ind_15m.items():
                     desc = indicator_descriptions.get(key, "No description available.")
-                    st.markdown(f"**{key}: {round(value, 2) if isinstance(value, (float, int)) else value}**  \n*{desc}*")
+                    st.markdown(f"**{key}: {round(value, 2) if isinstance(value, (float, int)) else value}**  
+*{desc}*")
 
             with st.expander("📊 1d TMV Input Components (with meaning)"):
                 st.markdown("### 📘 Indicator Breakdown (1d)")
-                indicator_descriptions = {
-                    "EMA_8": "Exponential Moving Average over 8 periods — gives more weight to recent prices. Helps detect short-term trends.",
-                    "EMA_21": "Exponential Moving Average over 21 periods — used to identify medium-term trend direction.",
-                    "RSI": "Relative Strength Index — momentum oscillator. Values >70 suggest overbought; <30 suggest oversold.",
-                    "MACD": "Moving Average Convergence Divergence — trend-following momentum indicator. A rising MACD suggests bullish momentum.",
-                    "ADX": "Average Directional Index — strength of the trend. ADX > 25 indicates a strong trend.",
-                    "OBV": "On-Balance Volume — volume-based trend confirmation. Rising OBV with rising price confirms uptrend.",
-                    "MFI": "Money Flow Index — RSI + volume. Measures buying/selling pressure. High = overbought, low = oversold."
-                }
                 for key, value in ind_1d.items():
                     desc = indicator_descriptions.get(key, "No description available.")
-                    st.markdown(f"**{key}: {round(value, 2) if isinstance(value, (float, int)) else value}**  \n*{desc}*")
+                    st.markdown(f"**{key}: {round(value, 2) if isinstance(value, (float, int)) else value}**  
+*{desc}*")
 
             df_15m["EMA_8"] = df_15m.ta.ema(length=8)
             df_15m["EMA_21"] = df_15m.ta.ema(length=21)
