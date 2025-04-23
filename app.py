@@ -13,6 +13,7 @@ import os
 import time
 from streamlit_autorefresh import st_autorefresh
 from fetch_ohlc import fetch_ohlc_data, calculate_indicators
+import streamlit.components.v1 as components
 
 st.set_page_config(page_title="📊 TMV Stock Ranking", layout="wide")
 
@@ -57,18 +58,28 @@ except Exception as e:
     st.stop()
 
 # Countdown + Refresh above the table
-countdown_sec = 300
-last_refresh = st.session_state.get("last_refresh_time", time.time())
-next_refresh = last_refresh + countdown_sec
-remaining = int(max(0, next_refresh - time.time()))
-st.session_state["last_refresh_time"] = time.time()
+countdown_html = f"""
+<div style="font-family: monospace; font-size: 18px; background: #f8f8f8; padding: 10px; border-radius: 10px; text-align: center;">
+  🔄 Auto-refreshes every 5 minutes<br>
+  ⏳ <b>Next refresh in <span id="timer">{300}</span> seconds</b>
+</div>
 
-st_autorefresh(interval=countdown_sec * 1000, key="tmv_refresh")
-st.markdown("### ⏱ Auto-Refresh Countdown")
-st.info(f"""🔄 This table auto-refreshes every 5 minutes.
+<script>
+  var totalSeconds = {300};
+  var countdownEl = document.getElementById("timer");
+  var countdown = setInterval(function() {{
+    totalSeconds--;
+    if (totalSeconds <= 0) {{
+      clearInterval(countdown);
+      location.reload();
+    }} else {{
+      countdownEl.textContent = totalSeconds;
+    }}
+  }}, 1000);
+</script>
+"""
 
-⏳ **Next refresh in {remaining} seconds**.""")
-
+components.html(countdown_html, height=100)
 
 # TMV Table & Explainer
 st.title("📈 Multi-Timeframe TMV Stock Ranking Dashboard")
