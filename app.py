@@ -10,6 +10,7 @@ from fpdf import FPDF
 import base64
 from fetch_ohlc import fetch_ohlc_data, calculate_indicators
 from streamlit_autorefresh import st_autorefresh
+import time
 
 st_autorefresh(interval=60000, key="refresh")  # 60,000 ms = 1 minute
 
@@ -59,7 +60,18 @@ except Exception as e:
 st.title("📈 Multi-Timeframe TMV Stock Ranking Dashboard")
 try:
     csv_url = "https://docs.google.com/spreadsheets/d/1Cpgj1M_ofN1SqvuqDDHuN7Gy17tfkhy4fCCP8Mx7bRI/export?format=csv&gid=0"
-    df = pd.read_csv(csv_url)
+    # Auto-refresh every 5 minutes
+countdown_sec = 300
+st_autorefresh(interval=countdown_sec * 1000, key="tmv_refresh")
+
+with st.expander("⏱ Auto-Refresh Countdown (TMV Table)", expanded=True):
+    st.markdown("This table refreshes automatically every 5 minutes.")
+    countdown_placeholder = st.empty()
+    for remaining in range(countdown_sec, 0, -1):
+        countdown_placeholder.markdown(f"⏳ Refreshing in **{remaining} seconds**...")
+        time.sleep(1)
+
+df = pd.read_csv(csv_url)
     df["Explanation"] = "Click to explain"
 
     st.dataframe(df, use_container_width=True)
