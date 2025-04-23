@@ -60,16 +60,19 @@ except Exception as e:
 st.title("📈 Multi-Timeframe TMV Stock Ranking Dashboard")
 try:
     csv_url = "https://docs.google.com/spreadsheets/d/1Cpgj1M_ofN1SqvuqDDHuN7Gy17tfkhy4fCCP8Mx7bRI/export?format=csv&gid=0"
-    # Auto-refresh every 5 minutes
+
+# Auto-refresh every 5 minutes
 countdown_sec = 300
+last_refresh = st.session_state.get("last_refresh_time", time.time())
+next_refresh = last_refresh + countdown_sec
+remaining = int(max(0, next_refresh - time.time()))
+st.session_state["last_refresh_time"] = time.time()
+
 st_autorefresh(interval=countdown_sec * 1000, key="tmv_refresh")
 
-with st.expander("⏱ Auto-Refresh Countdown (TMV Table)", expanded=True):
-    st.markdown("This table refreshes automatically every 5 minutes.")
-    countdown_placeholder = st.empty()
-    for remaining in range(countdown_sec, 0, -1):
-        countdown_placeholder.markdown(f"⏳ Refreshing in **{remaining} seconds**...")
-        time.sleep(1)
+st.markdown("### ⏱ Auto-Refresh Countdown")
+st.info(f"🔄 This table auto-refreshes every 5 minutes.\n\n⏳ **Next refresh in `{remaining}` seconds**.")
+
 
 df = pd.read_csv(csv_url)
     df["Explanation"] = "Click to explain"
