@@ -90,9 +90,8 @@ try:
     df["Explanation"] = "Click to explain"
 
     df = df[[
-        "Symbol", "LTP", "% Change",
-        "15m TMV Inputs", "15m TMV Score", "15m Trend Direction", "15m Reversal Probability",
-        "1d TMV Inputs", "1d TMV Score", "1d Trend Direction", "1d Reversal Probability",
+        "Symbol", "LTP", "% Change", "15m TMV Score", "15m Trend Direction", "15m Reversal Probability",
+        "1d TMV Score", "1d Trend Direction", "1d Reversal Probability",
         "Explanation"
     ]]
 
