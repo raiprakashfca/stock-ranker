@@ -65,9 +65,10 @@ st.session_state["last_refresh_time"] = time.time()
 
 st_autorefresh(interval=countdown_sec * 1000, key="tmv_refresh")
 st.markdown("### ⏱ Auto-Refresh Countdown")
-st.info(f"🔄 This table auto-refreshes every 5 minutes.
+st.info(f"""🔄 This table auto-refreshes every 5 minutes.
 
-⏳ **Next refresh in `{remaining}` seconds**.")
+⏳ **Next refresh in {remaining} seconds**.""")
+
 
 # TMV Table & Explainer
 st.title("📈 Multi-Timeframe TMV Stock Ranking Dashboard")
