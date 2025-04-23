@@ -95,6 +95,9 @@ try:
 
     st.markdown("---")
     st.subheader("📘 TMV Explainer")
+    
+if "TATAPOWER" not in df["Symbol"].values:
+    df = pd.concat([df, pd.DataFrame([{"Symbol": "TATAPOWER"}])], ignore_index=True)
 
     selected_stock = st.selectbox("Select a stock to generate explanation", df["Symbol"].unique())
     if selected_stock:
