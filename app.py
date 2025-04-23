@@ -58,14 +58,14 @@ except Exception as e:
 
 # Countdown + Refresh above the table
 countdown_html = f"""
-<div style="font-family: monospace; font-size: 18px; background: #f8f8f8; padding: 10px; border-radius: 10px; text-align: center;">
+<div style=\"font-family: monospace; font-size: 18px; background: #f8f8f8; padding: 10px; border-radius: 10px; text-align: center;\">
   🔄 Auto-refreshes every 5 minutes<br>
   ⏳ <b>Next refresh in <span id=\"timer\">{300}</span> seconds</b>
 </div>
 
 <script>
   var totalSeconds = {300};
-  var countdownEl = document.getElementById("timer");
+  var countdownEl = document.getElementById(\"timer\");
   var countdown = setInterval(function() {{
     totalSeconds--;
     if (totalSeconds <= 0) {{
@@ -123,15 +123,13 @@ try:
                 }
                 for key, value in ind_15m.items():
                     desc = indicator_descriptions.get(key, "No description available.")
-                    st.markdown(f"**{key}: {round(value, 2) if isinstance(value, (float, int)) else value}**  
-*{desc}*")
+                    st.markdown(f"""**{key}: {round(value, 2) if isinstance(value, (float, int)) else value}**\n*{desc}*""")
 
             with st.expander("📊 1d TMV Input Components (with meaning)"):
                 st.markdown("### 📘 Indicator Breakdown (1d)")
                 for key, value in ind_1d.items():
                     desc = indicator_descriptions.get(key, "No description available.")
-                    st.markdown(f"**{key}: {round(value, 2) if isinstance(value, (float, int)) else value}**  
-*{desc}*")
+                    st.markdown(f"""**{key}: {round(value, 2) if isinstance(value, (float, int)) else value}**\n*{desc}*""")
 
             df_15m["EMA_8"] = df_15m.ta.ema(length=8)
             df_15m["EMA_21"] = df_15m.ta.ema(length=21)
