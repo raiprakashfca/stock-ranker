@@ -85,12 +85,10 @@ st.title("📈 Multi-Timeframe TMV Stock Ranking Dashboard")
 try:
     csv_url = "https://docs.google.com/spreadsheets/d/1Cpgj1M_ofN1SqvuqDDHuN7Gy17tfkhy4fCCP8Mx7bRI/export?format=csv&gid=0"
     df = pd.read_csv(csv_url)
-    df["Explanation"] = "Click to explain"
     df = df[[
         "Symbol", "LTP", "% Change",
         "15m TMV Score", "15m Trend Direction", "15m Reversal Probability",
-        "1d TMV Score", "1d Trend Direction", "1d Reversal Probability",
-        "Explanation"
+        "1d TMV Score", "1d Trend Direction", "1d Reversal Probability"
     ]]
 
     st.dataframe(df, use_container_width=True)
