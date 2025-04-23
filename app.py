@@ -87,8 +87,6 @@ try:
     csv_url = "https://docs.google.com/spreadsheets/d/1Cpgj1M_ofN1SqvuqDDHuN7Gy17tfkhy4fCCP8Mx7bRI/export?format=csv&gid=0"
     df = pd.read_csv(csv_url)
 
-    df["15m TMV Inputs"] = "Click to expand"
-    df["1d TMV Inputs"] = "Click to expand"
     df["Explanation"] = "Click to explain"
 
     df = df[[
