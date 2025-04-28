@@ -103,10 +103,6 @@ try:
         "1d TMV Score", "1d Trend Direction", "1d Reversal Probability"
     ]]
 
-    # Always add TATAPOWER if missing
-    if "TATAPOWER" not in df["Symbol"].values:
-        df = pd.concat([df, pd.DataFrame([{"Symbol": "TATAPOWER"}])], ignore_index=True)
-
     # Safely convert % Change to numeric
     df["% Change"] = pd.to_numeric(df["% Change"], errors="coerce")
 
@@ -131,7 +127,7 @@ try:
     st.markdown("---")
     st.subheader("📘 TMV Explainer")
 
-    selected_stock = st.selectbox("Select a stock to generate explanation", df["Symbol"].unique())
+    selected_stock = st.selectbox("Select a stock to generate explanation", df["Symbol"].dropna().unique())
     if selected_stock:
         st.markdown(f"### Real Indicators for {selected_stock}")
         try:
@@ -173,5 +169,37 @@ try:
 
         except Exception as e:
             st.error(f"❌ Error fetching indicators for {selected_stock}: {e}")
+
+    st.markdown("---")
+    st.subheader("➕ Admin: Add New Stock")
+
+    @st.cache_data(ttl=3600)
+    def load_instruments():
+        kite = KiteConnect(api_key=api_key)
+        kite.set_access_token(access_token)
+        instruments = kite.instruments(exchange="NSE")
+        df_instruments = pd.DataFrame(instruments)
+        return df_instruments[["tradingsymbol", "name", "instrument_type"]]
+
+    df_instruments = load_instruments()
+
+    search_query = st.text_input("Search Stock Name or Symbol")
+    if search_query:
+        matches = df_instruments[df_instruments["tradingsymbol"].str.contains(search_query.upper()) | df_instruments["name"].str.contains(search_query, case=False)]
+        if not matches.empty:
+            selected_stock = st.selectbox("Select a stock to add", matches["tradingsymbol"] + " - " + matches["name"])
+            if st.button("➕ Add Selected Stock to TMV Sheet"):
+                try:
+                    selected_symbol = selected_stock.split(" - ")[0]
+                    background_sheet = client.open("BackgroundAnalysisStore").worksheet("Sheet1")
+                    background_sheet.append_row([selected_symbol])
+                    st.toast(f"✅ {selected_symbol} added successfully!", icon='🎯')
+time.sleep(2)
+st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Failed to add stock: {e}")
+        else:
+            st.warning("🔍 No matches found. Try different keyword.")
+
 except Exception as e:
     st.error(f"❌ Failed to load TMV data: {e}")
