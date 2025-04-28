@@ -184,7 +184,7 @@ try:
             if st.button("➕ Add Selected Stock to TMV Sheet"):
                 try:
                     selected_symbol = selected_stock.split(" - ")[0]
-                    background_sheet = client.open("BackgroundAnalysisStore").worksheet("Sheet1")
+                    background_sheet = client.open("BackgroundAnalysisStore").worksheet("LiveScores")
                     background_sheet.append_row([selected_symbol])
                     st.toast(f"✅ {selected_symbol} added successfully!", icon='🎯')
                     time.sleep(2)
