@@ -194,8 +194,8 @@ try:
                     background_sheet = client.open("BackgroundAnalysisStore").worksheet("Sheet1")
                     background_sheet.append_row([selected_symbol])
                     st.toast(f"✅ {selected_symbol} added successfully!", icon='🎯')
-time.sleep(2)
-st.rerun()
+                    time.sleep(2)
+                    st.rerun()
                 except Exception as e:
                     st.error(f"❌ Failed to add stock: {e}")
         else:
