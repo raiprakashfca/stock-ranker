@@ -107,7 +107,12 @@ try:
     if "TATAPOWER" not in df["Symbol"].values:
         df = pd.concat([df, pd.DataFrame([{"Symbol": "TATAPOWER"}])], ignore_index=True)
 
+    # Safely convert % Change to numeric
+    df["% Change"] = pd.to_numeric(df["% Change"], errors="coerce")
+
     def highlight_change(val):
+        if pd.isna(val):
+            return ''
         color = 'green' if val > 0 else 'red'
         return f'color: {color}'
 
