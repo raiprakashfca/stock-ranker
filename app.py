@@ -3,6 +3,7 @@ import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 from kiteconnect import KiteConnect
+import pytz
 from datetime import datetime
 import matplotlib.pyplot as plt
 import pandas_ta as ta
@@ -39,7 +40,7 @@ with st.sidebar.expander("🔐 Zerodha Token Generator", expanded=False):
             kite = KiteConnect(api_key=api_key)
             session_data = kite.generate_session(request_token, api_secret=api_secret)
             access_token = session_data["access_token"]
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            timestamp = datetime.now(pytz.timezone('Asia/Kolkata')).strftime("%Y-%m-%d %H:%M:%S")
             token_sheet.update_acell("C1", access_token)
             token_sheet.update_acell("D1", timestamp)
             st.success("✅ Access Token saved successfully.")
@@ -56,14 +57,17 @@ except Exception as e:
     st.sidebar.error(f"❌ Token verification failed: {e}")
     st.stop()
 
+st.sidebar.markdown("---")
+st.sidebar.info("🔄 Data auto-refreshes every 1 minute.\n\n🕒 Last updated time shown on dashboard.")
+
 # Auto-refresh every 60 seconds
 st_autorefresh(interval=60000, key="refresh")
 
 # Countdown + Refresh above the table
 countdown_html = f"""
-<div style=\"font-family: monospace; font-size: 18px; background: #f8f8f8; padding: 10px; border-radius: 10px; text-align: center;\">
-  🔄 Auto-refreshes every 1 minute<br>
-  ⏳ <b>Next refresh in <span id=\"timer\">{60}</span> seconds</b>
+<div style=\"font-family: monospace; font-size: 16px; background: #e0f7fa; padding: 8px; border-radius: 8px; text-align: center; margin-bottom: 10px;\">
+  🔄 Auto-refresh every 1 minute |
+  ⏳ <b><span id=\"timer\">{60}</span>s</b>
 </div>
 
 <script>
@@ -80,13 +84,13 @@ countdown_html = f"""
   }}, 1000);
 </script>
 """
-components.html(countdown_html, height=100)
+components.html(countdown_html, height=70)
 
 # TMV Table & Explainer
 st.title("📈 Multi-Timeframe TMV Stock Ranking Dashboard")
 
 # Display Last Updated Time
-now = datetime.now().strftime("%d %b %Y, %I:%M %p IST")
+now = datetime.now(pytz.timezone('Asia/Kolkata')).strftime("%d %b %Y, %I:%M %p IST")
 st.markdown(f"#### 🕒 Last Updated: {now}")
 
 try:
@@ -103,16 +107,21 @@ try:
     if "TATAPOWER" not in df["Symbol"].values:
         df = pd.concat([df, pd.DataFrame([{"Symbol": "TATAPOWER"}])], ignore_index=True)
 
-    st.dataframe(df, use_container_width=True)
+    def highlight_change(val):
+        color = 'green' if val > 0 else 'red'
+        return f'color: {color}'
 
-    # Optional: Download TMV table
-    csv = df.to_csv(index=False).encode('utf-8')
-    st.download_button(
-        label="📥 Download TMV Table as CSV",
-        data=csv,
-        file_name=f"TMV_Stock_Ranking_{datetime.now().strftime('%Y%m%d')}.csv",
-        mime='text/csv',
-    )
+    styled_df = df.style.applymap(highlight_change, subset=["% Change"])
+    st.dataframe(styled_df, use_container_width=True)
+
+    with st.expander("📥 Download Today's TMV Table"):
+        csv = df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="Download as CSV",
+            data=csv,
+            file_name=f"TMV_Stock_Ranking_{datetime.now(pytz.timezone('Asia/Kolkata')).strftime('%Y%m%d')}.csv",
+            mime='text/csv',
+        )
 
     st.markdown("---")
     st.subheader("📘 TMV Explainer")
