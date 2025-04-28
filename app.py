@@ -56,15 +56,18 @@ except Exception as e:
     st.sidebar.error(f"❌ Token verification failed: {e}")
     st.stop()
 
+# Auto-refresh every 60 seconds
+st_autorefresh(interval=60000, key="refresh")
+
 # Countdown + Refresh above the table
 countdown_html = f"""
 <div style=\"font-family: monospace; font-size: 18px; background: #f8f8f8; padding: 10px; border-radius: 10px; text-align: center;\">
-  🔄 Auto-refreshes every 5 minutes<br>
-  ⏳ <b>Next refresh in <span id=\"timer\">{300}</span> seconds</b>
+  🔄 Auto-refreshes every 1 minute<br>
+  ⏳ <b>Next refresh in <span id=\"timer\">{60}</span> seconds</b>
 </div>
 
 <script>
-  var totalSeconds = {300};
+  var totalSeconds = {60};
   var countdownEl = document.getElementById(\"timer\");
   var countdown = setInterval(function() {{
     totalSeconds--;
@@ -85,7 +88,7 @@ try:
     csv_url = "https://docs.google.com/spreadsheets/d/1Cpgj1M_ofN1SqvuqDDHuN7Gy17tfkhy4fCCP8Mx7bRI/export?format=csv&gid=0"
     df = pd.read_csv(csv_url)
 
-    df = df[[
+    df = df[[ 
         "Symbol", "LTP", "% Change",
         "15m TMV Score", "15m Trend Direction", "15m Reversal Probability",
         "1d TMV Score", "1d Trend Direction", "1d Reversal Probability"
