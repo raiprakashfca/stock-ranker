@@ -84,6 +84,11 @@ components.html(countdown_html, height=100)
 
 # TMV Table & Explainer
 st.title("📈 Multi-Timeframe TMV Stock Ranking Dashboard")
+
+# Display Last Updated Time
+now = datetime.now().strftime("%d %b %Y, %I:%M %p IST")
+st.markdown(f"#### 🕒 Last Updated: {now}")
+
 try:
     csv_url = "https://docs.google.com/spreadsheets/d/1Cpgj1M_ofN1SqvuqDDHuN7Gy17tfkhy4fCCP8Mx7bRI/export?format=csv&gid=0"
     df = pd.read_csv(csv_url)
@@ -99,6 +104,15 @@ try:
         df = pd.concat([df, pd.DataFrame([{"Symbol": "TATAPOWER"}])], ignore_index=True)
 
     st.dataframe(df, use_container_width=True)
+
+    # Optional: Download TMV table
+    csv = df.to_csv(index=False).encode('utf-8')
+    st.download_button(
+        label="📥 Download TMV Table as CSV",
+        data=csv,
+        file_name=f"TMV_Stock_Ranking_{datetime.now().strftime('%Y%m%d')}.csv",
+        mime='text/csv',
+    )
 
     st.markdown("---")
     st.subheader("📘 TMV Explainer")
