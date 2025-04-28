@@ -158,14 +158,7 @@ try:
                     desc = indicator_descriptions.get(key, "No description available.")
                     st.markdown(f"""**{key}: {round(value, 2) if isinstance(value, (float, int)) else value}**\n*{desc}*""")
 
-            df_15m["EMA_8"] = df_15m.ta.ema(length=8)
-            df_15m["EMA_21"] = df_15m.ta.ema(length=21)
-            fig, ax = plt.subplots()
-            ax.plot(df_15m.index, df_15m["close"], label="Close")
-            ax.plot(df_15m.index, df_15m["EMA_8"], label="EMA 8")
-            ax.plot(df_15m.index, df_15m["EMA_21"], label="EMA 21")
-            ax.legend()
-            st.pyplot(fig)
+            
 
         except Exception as e:
             st.error(f"❌ Error fetching indicators for {selected_stock}: {e}")
