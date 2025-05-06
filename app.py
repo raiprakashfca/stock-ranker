@@ -4,12 +4,6 @@ import pytz
 from datetime import datetime, timedelta
 from kiteconnect import KiteConnect
 from streamlit_autorefresh import st_autorefresh
-import matplotlib.pyplot as plt
-import pandas_ta as ta
-from fpdf import FPDF
-import base64
-import os
-import time
 import streamlit.components.v1 as components
 
 from fetch_ohlc import fetch_ohlc_data, calculate_indicators
@@ -55,7 +49,7 @@ st_autorefresh(interval=60000, key="refresh")  # 60 seconds
 # ----------- Refresh Countdown UI -----------
 countdown_html = """
 <div style="font-size:14px; color:gray;">
-Next refresh in <span id="countdown"></span> seconds.
+Next refresh in <span id=\"countdown\"></span> seconds.
 </div>
 <script>
 var seconds = 60;
@@ -85,27 +79,33 @@ try:
         "export?format=csv&gid=0"
     )
     df = pd.read_csv(csv_url)
-    cols = [
+    # Define desired columns
+    desired_cols = [
         "Symbol",
         "15m TMV Score", "15m Trend Direction", "15m Reversal Probability",
         "1h TMV Score", "1h Trend Direction", "1h Reversal Probability",
         "1d TMV Score", "1d Trend Direction", "1d Reversal Probability",
     ]
-    df = df[cols]
-    st.dataframe(
-        df.style.format({
-            "15m TMV Score": "{:.2f}",
-            "1h TMV Score": "{:.2f}",
-            "1d TMV Score": "{:.2f}"
-        })
-    )
+    # Determine which columns are actually present
+    available_cols = [c for c in desired_cols if c in df.columns]
+    missing_cols = [c for c in desired_cols if c not in df.columns]
+    if missing_cols:
+        st.warning(f"⚠️ Missing columns: {', '.join(missing_cols)}")
+    if available_cols:
+        # Format numeric score columns if present
+        fmt = {col: "{:.2f}" for col in available_cols if "Score" in col}
+        st.dataframe(
+            df[available_cols].style.format(fmt)
+        )
+    else:
+        st.error("❌ No matching ranking columns found in the sheet.")
 except Exception as e:
     st.error(f"❌ Error loading ranking data: {e}")
 
 # ----------- TMV Explainer -----------
 st.markdown("---")
 st.subheader("📘 TMV Explainer")
-if 'df' in locals():
+if 'df' in locals() and 'Symbol' in df.columns:
     selected_stock = st.selectbox(
         "Select a stock to generate explanation",
         df["Symbol"].dropna().unique()
@@ -150,12 +150,10 @@ def load_instruments():
     df_inst = pd.DataFrame(instruments)
     return df_inst[["tradingsymbol", "name", "instrument_type"]]
 
-df_inst = load_instruments()
+filtered = load_instruments()
 search_query = st.text_input("Search Stock Name or Symbol")
-filtered = (
-    df_inst[df_inst["tradingsymbol"].str.contains(search_query, case=False)]
-    if search_query else df_inst
-)
+if search_query:
+    filtered = filtered[filtered["tradingsymbol"].str.contains(search_query, case=False)]
 selected_new = st.selectbox("Select New Stock", filtered["tradingsymbol"].unique())
 if st.button("✅ Add Stock"):
     try:
