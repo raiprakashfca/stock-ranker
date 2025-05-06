@@ -15,12 +15,17 @@ from utils.token_utils import load_credentials_from_gsheet, save_token_to_gsheet
 st.set_page_config(page_title="📊 TMV Stock Ranking", layout="wide")
 
 # ----------- Load Zerodha Credentials -----------
-from gspread.exceptions import APIError
-try:
-    api_key, api_secret, access_token = load_credentials_from_gsheet()
-except APIError as e:
-    st.sidebar.error(f"❌ Failed to load credentials from Google Sheet: {e}")
-    st.stop()
+# Cache credentials to avoid exceeding GSheet read quota
+@st.cache_data(ttl=86400)  # Cache credentials once per day since they change infrequently
+def get_creds():
+    from gspread.exceptions import APIError
+    try:
+        return load_credentials_from_gsheet()
+    except APIError as e:
+        st.sidebar.error(f"❌ Failed to load credentials from Google Sheet: {e}")
+        st.stop()
+
+api_key, api_secret, access_token = get_creds()
 
 # ----------- Initialize Kite Client & WebSocket -----------
 kite = KiteConnect(api_key=api_key)
