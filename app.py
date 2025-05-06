@@ -15,6 +15,10 @@ st.set_page_config(page_title="📊 TMV Stock Ranking", layout="wide")
 # ----------- Load Zerodha Credentials -----------
 api_key, api_secret, access_token = load_credentials_from_gsheet()
 
+# ----------- Initialize Kite Client -----------
+kite = KiteConnect(api_key=api_key)
+kite.set_access_token(access_token)
+
 # ----------- Sidebar: Token Generator -----------
 with st.sidebar.expander("🔐 Zerodha Token Generator", expanded=False):
     login_url = f"https://kite.zerodha.com/connect/login?v=3&api_key={api_key}"
@@ -32,8 +36,6 @@ with st.sidebar.expander("🔐 Zerodha Token Generator", expanded=False):
 
 # ----------- Validate Token -----------
 try:
-    kite = KiteConnect(api_key=api_key)
-    kite.set_access_token(access_token)
     profile = kite.profile()
     st.sidebar.success(f"🔐 Token verified: {profile['user_name']} ({profile['user_id']})")
 except Exception as e:
@@ -79,26 +81,29 @@ try:
         "export?format=csv&gid=0"
     )
     df = pd.read_csv(csv_url)
-    # Define desired columns
-    desired_cols = [
-        "Symbol",
-        "15m TMV Score", "15m Trend Direction", "15m Reversal Probability",
-        "1h TMV Score", "1h Trend Direction", "1h Reversal Probability",
-        "1d TMV Score", "1d Trend Direction", "1d Reversal Probability",
-    ]
-    # Determine which columns are actually present
-    available_cols = [c for c in desired_cols if c in df.columns]
-    missing_cols = [c for c in desired_cols if c not in df.columns]
-    if missing_cols:
-        st.warning(f"⚠️ Missing columns: {', '.join(missing_cols)}")
-    if available_cols:
-        # Format numeric score columns if present
-        fmt = {col: "{:.2f}" for col in available_cols if "Score" in col}
-        st.dataframe(
-            df[available_cols].style.format(fmt)
-        )
+    if df.empty:
+        st.warning("⚠️ Ranking sheet is empty.")
     else:
-        st.error("❌ No matching ranking columns found in the sheet.")
+        # Fetch live LTPs for each Symbol
+        symbols = df['Symbol'].astype(str).tolist()
+        kite_symbols = [f"NSE:{s}" for s in symbols]
+        try:
+            ltp_data = kite.ltp(kite_symbols)
+            ltp_list = []
+            for sym in symbols:
+                key = f"NSE:{sym}"
+                price = ltp_data.get(key, {}).get('last_price', None)
+                ltp_list.append(price)
+            df['LTP'] = ltp_list
+        except Exception as e:
+            st.error(f"❌ Error fetching live LTPs: {e}")
+            df['LTP'] = None
+        # Reorder columns: Symbol, LTP, then rest
+        cols = ['Symbol', 'LTP'] + [c for c in df.columns if c not in ['Symbol', 'LTP']]
+        df = df[cols]
+        # Format numeric columns
+        fmt = {col: "{:.2f}" for col in df.columns if 'Score' in col or col == 'LTP'}
+        st.dataframe(df.style.format(fmt))
 except Exception as e:
     st.error(f"❌ Error loading ranking data: {e}")
 
