@@ -84,17 +84,12 @@ try:
     if df.empty:
         st.warning("⚠️ Ranking sheet is empty.")
     else:
-        # Fetch live LTPs for each Symbol
+        # Fetch live LTPs for each Symbol, converting underscores to hyphens
         symbols = df['Symbol'].astype(str).tolist()
-        kite_symbols = [f"NSE:{s}" for s in symbols]
+        kite_symbols = [f"NSE:{s.replace('_','-')}" for s in symbols]
         try:
             ltp_data = kite.ltp(kite_symbols)
-            ltp_list = []
-            for sym in symbols:
-                key = f"NSE:{sym}"
-                price = ltp_data.get(key, {}).get('last_price', None)
-                ltp_list.append(price)
-            df['LTP'] = ltp_list
+            df['LTP'] = [ltp_data.get(f"NSE:{s.replace('_','-')}", {}).get('last_price') for s in symbols]
         except Exception as e:
             st.error(f"❌ Error fetching live LTPs: {e}")
             df['LTP'] = None
@@ -113,7 +108,7 @@ st.subheader("📘 TMV Explainer")
 if 'df' in locals() and 'Symbol' in df.columns:
     selected_stock = st.selectbox(
         "Select a stock to generate explanation",
-        df["Symbol"].dropna().unique()
+        df['Symbol'].dropna().unique()
     )
 else:
     selected_stock = None
@@ -121,8 +116,10 @@ else:
 if selected_stock:
     st.markdown(f"### Real Indicators for {selected_stock}")
     try:
-        df_15m = fetch_ohlc_data(selected_stock, "15minute", 7)
-        df_1d = fetch_ohlc_data(selected_stock, "day", 90)
+        # Convert underscore to hyphen for API
+        api_symbol = selected_stock.replace('_','-')
+        df_15m = fetch_ohlc_data(api_symbol, "15minute", 7)
+        df_1d = fetch_ohlc_data(api_symbol, "day", 90)
         ind_15m = calculate_indicators(df_15m)
         ind_1d = calculate_indicators(df_1d)
         indicator_descriptions = {
