@@ -108,12 +108,30 @@ else:
     df['LTP'] = df['Symbol'].map(lambda s: ltp_ws.get(s) or kite.ltp([f"NSE:{s.replace('_','-')}"])[f"NSE:{s.replace('_','-')}"]['last_price'])
     # VWAP deviation: compute VWAP intraday
     def get_vwap(sym):
-        data = fetch_ohlc_data(sym.replace('_','-'), 'minute', 1)
-        vwap = ta.vwap(data['high'], data['low'], data['close'], data['volume']).iloc[-1]
-        return vwap
-    df['VWAP'] = df['Symbol'].apply(get_vwap)
-    df['VWAP Dev %'] = ((df['LTP'] - df['VWAP']) / df['VWAP'] * 100).round(2)
+        try:
+            data = fetch_ohlc_data(sym.replace('_','-'), 'minute', 1)
+            if data is None or data.empty:
+                return None
+            vwap_series = ta.vwap(data['high'], data['low'], data['close'], data['volume'])
+            return vwap_series.iloc[-1] if not vwap_series.empty else None
+        except Exception as e:
+            st.error(f"❌ Error computing VWAP for {sym}: {e}")
+            return None
+
+    # Calculate VWAP for each symbol with error handling
+    vwap_values = []
+    for sym in df['Symbol']:
+        vwap_values.append(get_vwap(sym))
+    df['VWAP'] = vwap_values
+    df['VWAP Dev %'] = df.apply(lambda row: ((row['LTP'] - row['VWAP']) / row['VWAP'] * 100).round(2)
+                                 if row['VWAP'] not in (None, 0) else None, axis=1)
+    
     # Reorder
+    cols = ['Symbol', 'LTP', 'VWAP', 'VWAP Dev %'] + [c for c in df.columns if c not in ['Symbol','LTP','VWAP','VWAP Dev %']]
+    df = df[cols]
+    fmt = {c: '{:.2f}' for c in df.columns if any(k in c for k in ['Score','Z','LTP','VWAP','Dev'])}
+    st.dataframe(df.style.format(fmt))
+# Reorder
     cols = ['Symbol', 'LTP', 'VWAP', 'VWAP Dev %'] + [c for c in df.columns if c not in ['Symbol','LTP','VWAP','VWAP Dev %']]
     df = df[cols]
     fmt = {c: '{:.2f}' for c in df.columns if any(k in c for k in ['Score','Z','LTP','VWAP','Dev'])}
