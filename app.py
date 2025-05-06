@@ -1,10 +1,12 @@
 import streamlit as st
 import pandas as pd
 import pytz
+import numpy as np
 from datetime import datetime, timedelta
-from kiteconnect import KiteConnect
+from kiteconnect import KiteConnect, KiteTicker
 from streamlit_autorefresh import st_autorefresh
 import streamlit.components.v1 as components
+import pandas_ta as ta
 
 from fetch_ohlc import fetch_ohlc_data, calculate_indicators
 from utils.token_utils import load_credentials_from_gsheet, save_token_to_gsheet
@@ -15,9 +17,31 @@ st.set_page_config(page_title="📊 TMV Stock Ranking", layout="wide")
 # ----------- Load Zerodha Credentials -----------
 api_key, api_secret, access_token = load_credentials_from_gsheet()
 
-# ----------- Initialize Kite Client -----------
+# ----------- Initialize Kite Client & WebSocket -----------
 kite = KiteConnect(api_key=api_key)
 kite.set_access_token(access_token)
+
+# Prepare instrument-token map for WebSocket
+instruments = kite.instruments(exchange="NSE")
+instrument_map = {item["tradingsymbol"]: item["instrument_token"] for item in instruments}
+
+ltp_ws = {}
+kt = KiteTicker(api_key, access_token)
+
+def on_ticks(ws, ticks):
+    for t in ticks:
+        # Reverse map: match instrument_token to tradingsymbol
+        sym = next((s for s, tok in instrument_map.items() if tok == t['instrument_token']), None)
+        if sym:
+            ltp_ws[sym] = t['last_price']
+
+def on_connect(ws, response):
+    # Subscribe to all tokens in universe dynamically later
+    pass
+
+kt.on_ticks = on_ticks
+kt.on_connect = on_connect
+kt.connect(threaded=True)
 
 # ----------- Sidebar: Token Generator -----------
 with st.sidebar.expander("🔐 Zerodha Token Generator", expanded=False):
@@ -43,123 +67,82 @@ except Exception as e:
     st.stop()
 
 st.sidebar.markdown("---")
-st.sidebar.info("🔄 Data auto-refreshes every 1 minute.\n\n🕒 Last updated time shown on dashboard.")
+st.sidebar.info("🔄 Data auto-refreshes every 1 minute.\n🕒 Last updated time shown on dashboard.")
 
 # ----------- Auto-Refresh -----------
-st_autorefresh(interval=60000, key="refresh")  # 60 seconds
+st_autorefresh(interval=60000, key="refresh")
 
-# ----------- Refresh Countdown UI -----------
+# ----------- Countdown UI -----------
 countdown_html = """
-<div style="font-size:14px; color:gray;">
-Next refresh in <span id=\"countdown\"></span> seconds.
+<div style='font-size:14px;color:gray;'>
+Next refresh in <span id='countdown'></span> seconds.
 </div>
 <script>
-var seconds = 60;
-var countdownElement = document.getElementById("countdown");
-function updateCountdown() {
-    countdownElement.innerText = seconds;
-    if (seconds > 0) {
-        seconds--;
-        setTimeout(updateCountdown, 1000);
-    }
-}
-updateCountdown();
+var seconds=60;const el=document.getElementById('countdown');
+function upd(){el.innerText=seconds; if(seconds-->0) setTimeout(upd,1000);} upd();
 </script>
 """
 components.html(countdown_html, height=70)
 
-# ----------- Page Title & Timestamp -----------
+# ----------- Title & Timestamp -----------
 st.title("📈 Multi-Timeframe TMV Stock Ranking Dashboard")
 now = datetime.now(pytz.timezone('Asia/Kolkata')).strftime("%d %b %Y, %I:%M %p IST")
 st.markdown(f"#### 🕒 Last Updated: {now}")
 
-# ----------- Load & Display Ranking Data -----------
-try:
-    csv_url = (
-        "https://docs.google.com/spreadsheets/d/"
-        "1Cpgj1M_ofN1SqvuqDDHuN7Gy17tfkhy4fCCP8Mx7bRI/"
-        "export?format=csv&gid=0"
-    )
-    df = pd.read_csv(csv_url)
-    if df.empty:
-        st.warning("⚠️ Ranking sheet is empty.")
-    else:
-        # Fetch live LTPs for each Symbol, converting underscores to hyphens
-        symbols = df['Symbol'].astype(str).tolist()
-        kite_symbols = [f"NSE:{s.replace('_','-')}" for s in symbols]
-        try:
-            ltp_data = kite.ltp(kite_symbols)
-            df['LTP'] = [ltp_data.get(f"NSE:{s.replace('_','-')}", {}).get('last_price') for s in symbols]
-        except Exception as e:
-            st.error(f"❌ Error fetching live LTPs: {e}")
-            df['LTP'] = None
-        # Reorder columns: Symbol, LTP, then rest
-        cols = ['Symbol', 'LTP'] + [c for c in df.columns if c not in ['Symbol', 'LTP']]
-        df = df[cols]
-        # Format numeric columns
-        fmt = {col: "{:.2f}" for col in df.columns if 'Score' in col or col == 'LTP'}
-        st.dataframe(df.style.format(fmt))
-except Exception as e:
-    st.error(f"❌ Error loading ranking data: {e}")
-
-# ----------- TMV Explainer -----------
-st.markdown("---")
-st.subheader("📘 TMV Explainer")
-if 'df' in locals() and 'Symbol' in df.columns:
-    selected_stock = st.selectbox(
-        "Select a stock to generate explanation",
-        df['Symbol'].dropna().unique()
-    )
+# ----------- Load & Normalize Ranking Data -----------
+csv_url = (
+    "https://docs.google.com/spreadsheets/d/"
+    "1Cpgj1M_ofN1SqvuqDDHuN7Gy17tfkhy4fCCP8Mx7bRI/"
+    "export?format=csv&gid=0"
+)
+df = pd.read_csv(csv_url)
+if df.empty:
+    st.warning("⚠️ Ranking sheet is empty.")
 else:
-    selected_stock = None
+    # Z-score normalization of TMV Score columns
+    score_cols = [c for c in df.columns if 'TMV Score' in c]
+    for col in score_cols:
+        mean, std = df[col].mean(), df[col].std()
+        df[col + ' Z'] = df[col].apply(lambda x: (x - mean) / std if std else 0)
+    # Fetch live LTPs from WebSocket or fallback to REST
+    df['LTP'] = df['Symbol'].map(lambda s: ltp_ws.get(s) or kite.ltp([f"NSE:{s.replace('_','-')}"])[f"NSE:{s.replace('_','-')}"]['last_price'])
+    # VWAP deviation: compute VWAP intraday
+    def get_vwap(sym):
+        data = fetch_ohlc_data(sym.replace('_','-'), 'minute', 1)
+        vwap = ta.vwap(data['high'], data['low'], data['close'], data['volume']).iloc[-1]
+        return vwap
+    df['VWAP'] = df['Symbol'].apply(get_vwap)
+    df['VWAP Dev %'] = ((df['LTP'] - df['VWAP']) / df['VWAP'] * 100).round(2)
+    # Reorder
+    cols = ['Symbol', 'LTP', 'VWAP', 'VWAP Dev %'] + [c for c in df.columns if c not in ['Symbol','LTP','VWAP','VWAP Dev %']]
+    df = df[cols]
+    fmt = {c: '{:.2f}' for c in df.columns if any(k in c for k in ['Score','Z','LTP','VWAP','Dev'])}
+    st.dataframe(df.style.format(fmt))
 
-if selected_stock:
-    st.markdown(f"### Real Indicators for {selected_stock}")
-    try:
-        # Convert underscore to hyphen for API
-        api_symbol = selected_stock.replace('_','-')
-        df_15m = fetch_ohlc_data(api_symbol, "15minute", 7)
-        df_1d = fetch_ohlc_data(api_symbol, "day", 90)
-        ind_15m = calculate_indicators(df_15m)
-        ind_1d = calculate_indicators(df_1d)
-        indicator_descriptions = {
-            "EMA_8": "Exponential Moving Average over 8 periods — gives more weight to recent prices.",
-            "EMA_21": "Exponential Moving Average over 21 periods — identifies medium-term trend.",
-            "RSI": "Relative Strength Index — momentum oscillator; >70 overbought, <30 oversold.",
-            "MACD": "Moving Average Convergence Divergence — momentum indicator.",
-            "ADX": "Average Directional Index — measures trend strength; >25 indicates strong trend.",
-            "OBV": "On-Balance Volume — uses volume flow to predict price changes.",
-            "SuperTrend": "SuperTrend indicator — combines ATR with price for trend signals.",
-        }
-        with st.expander("📊 15m Indicator Breakdown"):
-            for key, value in ind_15m.items():
-                desc = indicator_descriptions.get(key, "No description available.")
-                st.markdown(f"**{key}: {round(value,2) if isinstance(value,(float,int)) else value}**\n*{desc}*")
-        with st.expander("📊 1d Indicator Breakdown"):
-            for key, value in ind_1d.items():
-                desc = indicator_descriptions.get(key, "No description available.")
-                st.markdown(f"**{key}: {round(value,2) if isinstance(value,(float,int)) else value}**\n*{desc}*")
-    except Exception as e:
-        st.error(f"❌ Error fetching indicators for {selected_stock}: {e}")
-
-# ----------- Admin: Add New Stock -----------
-st.markdown("---")
-st.subheader("➕ Admin: Add New Stock")
-
-@st.cache_data(ttl=3600)
-def load_instruments():
-    instruments = kite.instruments(exchange="NSE")
-    df_inst = pd.DataFrame(instruments)
-    return df_inst[["tradingsymbol", "name", "instrument_type"]]
-
-filtered = load_instruments()
-search_query = st.text_input("Search Stock Name or Symbol")
-if search_query:
-    filtered = filtered[filtered["tradingsymbol"].str.contains(search_query, case=False)]
-selected_new = st.selectbox("Select New Stock", filtered["tradingsymbol"].unique())
-if st.button("✅ Add Stock"):
-    try:
-        # Append logic here
-        st.success(f"✅ {selected_new} added successfully!")
-    except Exception as e:
-        st.error(f"❌ Failed to add {selected_new}: {e}")
+# ----------- TMV Explainer with Advanced Contextual Modeling -----------
+st.markdown('---')
+st.subheader('📘 TMV Explainer')
+if not df.empty:
+    sel = st.selectbox('Select a stock to explain', df['Symbol'].unique())
+    if sel:
+        sym = sel.replace('_','-')
+        df_15 = fetch_ohlc_data(sym, '15minute', 7)
+        df_1d = fetch_ohlc_data(sym, 'day', 90)
+        ind15 = calculate_indicators(df_15)
+        ind1d = calculate_indicators(df_1d)
+        # Additional indicators
+        adx = ta.adx(df_15['high'],df_15['low'],df_15['close']).iloc[-1]['ADX_14']
+        st_adv = ta.supertrend(df_15['high'],df_15['low'],df_15['close']).iloc[-1]['SUPERT_7_3.0']
+        obv = ta.obv(df_15['close'],df_15['volume']).iloc[-1]
+        # Regression slope
+        slope = np.polyfit(np.arange(len(df_15)), df_15['close'], 1)[0]
+        # Percentile ranks for RSI
+        rsi_series = pd.Series(df_15['RSI']) if 'RSI' in df_15 else ta.rsi(df_15['close']).iloc
+        pctile = rsi_series.rank(pct=True).iloc[-1]
+        # Display
+        st.markdown(f"**15m ADX:** {adx:.2f} | **SuperTrend:** {st_adv:.2f} | **OBV:** {obv:.0f}")
+        st.markdown(f"**Price Slope:** {slope:.4f} | **RSI Percentile:** {pctile*100:.1f}%")
+        with st.expander('🔍 Full 15m Indicators'):
+            for k,v in ind15.items(): st.markdown(f"**{k}:** {v}")
+        with st.expander('🔍 Full 1d Indicators'):
+            for k,v in ind1d.items(): st.markdown(f"**{k}:** {v}")
