@@ -9,9 +9,8 @@ from utils.token_utils import load_credentials_from_gsheet
 from streamlit_autorefresh import st_autorefresh
 
 # ----------- Kite API Setup -----------
+from utils.token_utils import load_credentials_from_gsheet, save_token_to_gsheet
 api_key, api_secret, access_token = load_credentials_from_gsheet()
-kite = KiteConnect(api_key=api_key)
-kite.set_access_token(access_token)
 
 # ----------- Helper Functions -----------
 
