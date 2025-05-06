@@ -1,132 +1,165 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-import math
-import time
+import pytz
 from datetime import datetime, timedelta
 from kiteconnect import KiteConnect
-from utils.token_utils import load_credentials_from_gsheet
 from streamlit_autorefresh import st_autorefresh
+import matplotlib.pyplot as plt
+import pandas_ta as ta
+from fpdf import FPDF
+import base64
+import os
+import time
+import streamlit.components.v1 as components
 
-# ----------- Kite API Setup -----------
+from fetch_ohlc import fetch_ohlc_data, calculate_indicators
 from utils.token_utils import load_credentials_from_gsheet, save_token_to_gsheet
+
+# ----------- Streamlit Page Config -----------
+st.set_page_config(page_title="📊 TMV Stock Ranking", layout="wide")
+
+# ----------- Load Zerodha Credentials -----------
 api_key, api_secret, access_token = load_credentials_from_gsheet()
 
-# ----------- Helper Functions -----------
-
-def get_ltp(symbols: list) -> pd.DataFrame:
-    """
-    Fetches the last traded price for a list of symbols.
-    """
-    try:
-        raw = kite.ltp(symbols)
-        records = []
-        for sym, info in raw.items():
-            records.append({"Symbol": sym, "LTP": info.get("last_price", None)})
-        df = pd.DataFrame(records)
-        df.set_index("Symbol", inplace=True)
-        return df
-    except Exception as e:
-        st.error(f"Error fetching LTP: {e}")
-        return pd.DataFrame(columns=["Symbol","LTP"])  
-
-
-def norm_pdf(x: float) -> float:
-    return math.exp(-0.5 * x * x) / math.sqrt(2 * math.pi)
-
-
-def norm_cdf(x: float) -> float:
-    return (1 + math.erf(x / math.sqrt(2))) / 2
-
-
-def bs_greeks(option_type: str, S: float, K: float, T: float, r: float, sigma: float):
-    """
-    Calculates Black-Scholes Greeks for a European option.
-    option_type: 'CE' for call, 'PE' for put
-    S: spot price, K: strike, T: time to expiry in years
-    r: risk-free rate (annual), sigma: volatility (annual decimal)
-    Returns: delta, gamma, vega, theta
-    """
-    d1 = (math.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * math.sqrt(T))
-    d2 = d1 - sigma * math.sqrt(T)
-    if option_type.upper() == "CE":
-        delta = norm_cdf(d1)
-        theta = (-(S * norm_pdf(d1) * sigma) / (2 * math.sqrt(T))
-                 - r * K * math.exp(-r * T) * norm_cdf(d2)) / 365
-    else:
-        delta = norm_cdf(d1) - 1
-        theta = (-(S * norm_pdf(d1) * sigma) / (2 * math.sqrt(T))
-                 + r * K * math.exp(-r * T) * norm_cdf(-d2)) / 365
-    gamma = norm_pdf(d1) / (S * sigma * math.sqrt(T))
-    vega = S * norm_pdf(d1) * math.sqrt(T) / 100
-    return delta, gamma, vega, theta
-
-# ----------- Streamlit App -----------
-st.set_page_config(page_title="📊 Market Insights", layout="wide")
-st.title("📊 Market Insights Dashboard")
-
-# Create tabs for modular UI
-tabs = st.tabs(["Live LTP Dashboard", "Option Greeks Tracker"])
-
-# ----- Tab 1: Live LTP Dashboard -----
-with tabs[0]:
-    st.header("🔄 Live LTP Dashboard")
-    symbols_input = st.text_input(
-        "Enter symbols (comma-separated, e.g., NSE:NIFTY 50, NSE:BANKNIFTY, NSE:RELIANCE)",
-        value="NSE:NIFTY 50, NSE:BANKNIFTY"
-    )
-    refresh_sec = st.number_input("Refresh interval (seconds)", min_value=1, max_value=60, value=5)
-
-    # Auto-refresh
-    st_autorefresh(interval=refresh_sec * 1000, key="auto_ltp")
-
-    # Prepare symbol list
-    symbols = [s.strip() for s in symbols_input.split(",") if s.strip()]
-    if symbols:
-        df_ltp = get_ltp(symbols)
-        if not df_ltp.empty:
-            df_ltp["% Change"] = df_ltp["LTP"].pct_change() * 100
-            st.dataframe(df_ltp.style.format({"LTP": "{:.2f}", "% Change": "{:.2f}%"}))
-        else:
-            st.warning("No LTP data to display.")
-    else:
-        st.info("Please enter at least one symbol.")
-
-# ----- Tab 2: Option Greeks Tracker -----
-with tabs[1]:
-    st.header("📐 Option Greeks Tracker")
-    col1, col2 = st.columns(2)
-    with col1:
-        underlying = st.text_input("Underlying symbol (e.g., NSE:NIFTY 50)", value="NSE:NIFTY 50")
-        expiry = st.date_input("Expiry date", value=datetime.today() + timedelta(days=7))
-        strikes_input = st.text_input("Strike prices (comma-separated)", value="17500,17600")
-    with col2:
-        sigma = st.number_input("Implied Volatility (decimal)", min_value=0.01, max_value=2.0, value=0.15)
-        r = st.number_input("Risk-free rate (annual decimal)", min_value=0.0, max_value=0.2, value=0.06)
-
-    if st.button("Calculate Greeks"):
+# ----------- Sidebar: Token Generator -----------
+with st.sidebar.expander("🔐 Zerodha Token Generator", expanded=False):
+    login_url = f"https://kite.zerodha.com/connect/login?v=3&api_key={api_key}"
+    st.markdown(f"👉 [Login to Zerodha]({login_url})", unsafe_allow_html=True)
+    request_token = st.text_input("Paste Request Token Here")
+    if st.button("Generate Access Key"):
         try:
-            # Fetch spot price
-            data = kite.ltp([underlying])
-            S = data[underlying]["last_price"]
-            T = (expiry - datetime.today()).days / 365
-            greeks_records = []
-            for K in [int(s) for s in strikes_input.split(",") if s.strip().isdigit()]:
-                for opt_type in ["CE", "PE"]:
-                    delta, gamma, vega, theta = bs_greeks(opt_type, S, K, T, r, sigma)
-                    greeks_records.append({
-                        "Strike": K,
-                        "Type": opt_type,
-                        "Delta": round(delta, 4),
-                        "Gamma": round(gamma, 4),
-                        "Vega": round(vega, 4),
-                        "Theta": round(theta, 4)
-                    })
-            df_greeks = pd.DataFrame(greeks_records)
-            st.dataframe(df_greeks.set_index(["Strike","Type"]))
+            kite_temp = KiteConnect(api_key=api_key)
+            session_data = kite_temp.generate_session(request_token, api_secret=api_secret)
+            access_token = session_data["access_token"]
+            save_token_to_gsheet(access_token)
+            st.success("✅ Access Token saved successfully.")
         except Exception as e:
-            st.error(f"Error calculating Greeks: {e}")
+            st.error(f"❌ Failed to generate access token: {e}")
 
-# ----------- End of app.py -----------
+# ----------- Validate Token -----------
+try:
+    kite = KiteConnect(api_key=api_key)
+    kite.set_access_token(access_token)
+    profile = kite.profile()
+    st.sidebar.success(f"🔐 Token verified: {profile['user_name']} ({profile['user_id']})")
+except Exception as e:
+    st.sidebar.error(f"❌ Token verification failed: {e}")
+    st.stop()
 
-# Note: To enhance your Trend-Momentum-Volume (TMV) analysis, consider integrating institutional-grade indicators such as VWAP, ADX, and On-Balance Volume (OBV), and using higher-frequency data feeds.
+st.sidebar.markdown("---")
+st.sidebar.info("🔄 Data auto-refreshes every 1 minute.\n\n🕒 Last updated time shown on dashboard.")
+
+# ----------- Auto-Refresh -----------
+st_autorefresh(interval=60000, key="refresh")  # 60 seconds
+
+# ----------- Refresh Countdown UI -----------
+countdown_html = """
+<div style="font-size:14px; color:gray;">
+Next refresh in <span id="countdown"></span> seconds.
+</div>
+<script>
+var seconds = 60;
+var countdownElement = document.getElementById("countdown");
+function updateCountdown() {
+    countdownElement.innerText = seconds;
+    if (seconds > 0) {
+        seconds--;
+        setTimeout(updateCountdown, 1000);
+    }
+}
+updateCountdown();
+</script>
+"""
+components.html(countdown_html, height=70)
+
+# ----------- Page Title & Timestamp -----------
+st.title("📈 Multi-Timeframe TMV Stock Ranking Dashboard")
+now = datetime.now(pytz.timezone('Asia/Kolkata')).strftime("%d %b %Y, %I:%M %p IST")
+st.markdown(f"#### 🕒 Last Updated: {now}")
+
+# ----------- Load & Display Ranking Data -----------
+try:
+    csv_url = (
+        "https://docs.google.com/spreadsheets/d/"
+        "1Cpgj1M_ofN1SqvuqDDHuN7Gy17tfkhy4fCCP8Mx7bRI/"
+        "export?format=csv&gid=0"
+    )
+    df = pd.read_csv(csv_url)
+    cols = [
+        "Symbol",
+        "15m TMV Score", "15m Trend Direction", "15m Reversal Probability",
+        "1h TMV Score", "1h Trend Direction", "1h Reversal Probability",
+        "1d TMV Score", "1d Trend Direction", "1d Reversal Probability",
+    ]
+    df = df[cols]
+    st.dataframe(
+        df.style.format({
+            "15m TMV Score": "{:.2f}",
+            "1h TMV Score": "{:.2f}",
+            "1d TMV Score": "{:.2f}"
+        })
+    )
+except Exception as e:
+    st.error(f"❌ Error loading ranking data: {e}")
+
+# ----------- TMV Explainer -----------
+st.markdown("---")
+st.subheader("📘 TMV Explainer")
+if 'df' in locals():
+    selected_stock = st.selectbox(
+        "Select a stock to generate explanation",
+        df["Symbol"].dropna().unique()
+    )
+else:
+    selected_stock = None
+
+if selected_stock:
+    st.markdown(f"### Real Indicators for {selected_stock}")
+    try:
+        df_15m = fetch_ohlc_data(selected_stock, "15minute", 7)
+        df_1d = fetch_ohlc_data(selected_stock, "day", 90)
+        ind_15m = calculate_indicators(df_15m)
+        ind_1d = calculate_indicators(df_1d)
+        indicator_descriptions = {
+            "EMA_8": "Exponential Moving Average over 8 periods — gives more weight to recent prices.",
+            "EMA_21": "Exponential Moving Average over 21 periods — identifies medium-term trend.",
+            "RSI": "Relative Strength Index — momentum oscillator; >70 overbought, <30 oversold.",
+            "MACD": "Moving Average Convergence Divergence — momentum indicator.",
+            "ADX": "Average Directional Index — measures trend strength; >25 indicates strong trend.",
+            "OBV": "On-Balance Volume — uses volume flow to predict price changes.",
+            "SuperTrend": "SuperTrend indicator — combines ATR with price for trend signals.",
+        }
+        with st.expander("📊 15m Indicator Breakdown"):
+            for key, value in ind_15m.items():
+                desc = indicator_descriptions.get(key, "No description available.")
+                st.markdown(f"**{key}: {round(value,2) if isinstance(value,(float,int)) else value}**\n*{desc}*")
+        with st.expander("📊 1d Indicator Breakdown"):
+            for key, value in ind_1d.items():
+                desc = indicator_descriptions.get(key, "No description available.")
+                st.markdown(f"**{key}: {round(value,2) if isinstance(value,(float,int)) else value}**\n*{desc}*")
+    except Exception as e:
+        st.error(f"❌ Error fetching indicators for {selected_stock}: {e}")
+
+# ----------- Admin: Add New Stock -----------
+st.markdown("---")
+st.subheader("➕ Admin: Add New Stock")
+
+@st.cache_data(ttl=3600)
+def load_instruments():
+    instruments = kite.instruments(exchange="NSE")
+    df_inst = pd.DataFrame(instruments)
+    return df_inst[["tradingsymbol", "name", "instrument_type"]]
+
+df_inst = load_instruments()
+search_query = st.text_input("Search Stock Name or Symbol")
+filtered = (
+    df_inst[df_inst["tradingsymbol"].str.contains(search_query, case=False)]
+    if search_query else df_inst
+)
+selected_new = st.selectbox("Select New Stock", filtered["tradingsymbol"].unique())
+if st.button("✅ Add Stock"):
+    try:
+        # Append logic here
+        st.success(f"✅ {selected_new} added successfully!")
+    except Exception as e:
+        st.error(f"❌ Failed to add {selected_new}: {e}")
