@@ -58,6 +58,8 @@ with st.sidebar.expander("🔐 Zerodha Token Generator", expanded=False):
     # Generate login URL using KiteConnect's built-in method
     kc = KiteConnect(api_key=api_key)
     login_url = kc.login_url()
+    # Display raw login URL for debugging
+    st.sidebar.write(login_url)
     # Display clickable link that opens in a new tab
     st.markdown(
         f"<a href=\"{login_url}\" target=\"_blank\" rel=\"noopener noreferrer\">👉 Login to Zerodha</a>",
