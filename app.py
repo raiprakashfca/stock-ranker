@@ -72,18 +72,6 @@ with st.sidebar.expander("🔐 Zerodha Token Generator", expanded=False):
             save_token_to_gsheet(access_token)
             st.success("✅ Access Token saved successfully.")
         except Exception as e:
-            st.error(f"❌ Failed to generate access token: {e}"):
-    login_url = f"https://kite.zerodha.com/connect/login?v=3&api_key={api_key}"
-    st.markdown(f"👉 [Login to Zerodha]({login_url})", unsafe_allow_html=True)
-    request_token = st.text_input("Paste Request Token Here")
-    if st.button("Generate Access Key"):
-        try:
-            kite_temp = KiteConnect(api_key=api_key)
-            session_data = kite_temp.generate_session(request_token, api_secret=api_secret)
-            access_token = session_data["access_token"]
-            save_token_to_gsheet(access_token)
-            st.success("✅ Access Token saved successfully.")
-        except Exception as e:
             st.error(f"❌ Failed to generate access token: {e}")
 
 # ----------- Validate Token -----------
