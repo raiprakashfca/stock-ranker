@@ -6,7 +6,6 @@ from datetime import datetime
 from kiteconnect import KiteConnect, KiteTicker
 from streamlit_autorefresh import st_autorefresh
 import streamlit.components.v1 as components
-import pandas_ta as ta
 
 from fetch_ohlc import fetch_ohlc_data, calculate_indicators
 from utils.token_utils import load_credentials_from_gsheet, save_token_to_gsheet
@@ -14,7 +13,7 @@ from utils.token_utils import load_credentials_from_gsheet, save_token_to_gsheet
 # ----------- Streamlit Page Config -----------
 st.set_page_config(page_title="📊 TMV Stock Ranking", layout="wide")
 
-# ----------- Load Zerodha Credentials with Caching -----------
+# ----------- Load Zerodha Credentials (cached) -----------
 @st.cache_data(ttl=86400)
 def get_creds():
     from gspread.exceptions import APIError
@@ -38,14 +37,14 @@ kt = KiteTicker(api_key, access_token)
 
 def on_ticks(ws, ticks):
     for t in ticks:
-        sym = next((s for s, tok in instrument_map.items() if tok == t['instrument_token']), None)
+        sym = next((s for s, tok in instrument_map.items() if tok == t["instrument_token"]), None)
         if sym:
-            ltp_ws[sym] = t['last_price']
+            ltp_ws[sym] = t["last_price"]
 
 def on_connect(ws, response):
-    # Subscribe to all known tokens
-    kt.subscribe(list(instrument_map.values()))
-    kt.set_mode(list(instrument_map.values()), kt.MODE_FULL)
+    tokens = list(instrument_map.values())
+    kt.subscribe(tokens)
+    kt.set_mode(tokens, kt.MODE_FULL)
 
 kt.on_ticks = on_ticks
 kt.on_connect = on_connect
@@ -53,11 +52,12 @@ kt.connect(threaded=True)
 
 # ----------- Sidebar: Token Generator -----------
 with st.sidebar.expander("🔐 Zerodha Token Generator", expanded=False):
-    kc = KiteConnect(api_key=api_key)
+    # Use the same redirect URI you whitelisted in Kite Console
+    kc = KiteConnect(api_key=api_key, redirect_uri="https://stock-ranker-prakash.streamlit.app/")
     login_url = kc.login_url()
-    # Debug: show the exact login URL
+    # Show the raw URL so you can verify the redirect_uri param
     st.sidebar.write(login_url)
-    # Clickable login link
+    # Clickable “Login” link
     st.markdown(
         f"<a href=\"{login_url}\" target=\"_blank\">👉 Login to Zerodha</a>",
         unsafe_allow_html=True
@@ -65,11 +65,13 @@ with st.sidebar.expander("🔐 Zerodha Token Generator", expanded=False):
     request_token = st.text_input("Paste Request Token Here")
     if st.button("Generate Access Key"):
         try:
-            kite_temp = KiteConnect(api_key=api_key)
-            session_data = kite_temp.generate_session(request_token, api_secret=api_secret)
+            # Exchange the request token for an access token
+            session_data = kc.generate_session(request_token, api_secret=api_secret)
             new_token = session_data["access_token"]
             save_token_to_gsheet(new_token)
+            kite.set_access_token(new_token)
             st.success("✅ Access Token saved successfully.")
+            st.experimental_rerun()  # reload the app to pick up the new token
         except Exception as e:
             st.error(f"❌ Failed to generate access token: {e}")
 
@@ -82,7 +84,7 @@ except Exception as e:
     st.stop()
 
 st.sidebar.markdown("---")
-st.sidebar.info("🔄 Auto-refresh every 1 min. 🕒 Last update shown below.")
+st.sidebar.info("🔄 Auto-refresh every 1 min. 🕒 Last updated shown below.")
 
 # ----------- Auto-Refresh & Countdown -----------
 st_autorefresh(interval=60000, key="refresh")
@@ -91,15 +93,16 @@ countdown_html = """
 Next refresh in <span id='countdown'></span> seconds.
 </div>
 <script>
-let s=60;const e=document.getElementById('countdown');
-function u(){e.innerText=s; if(s-->0) setTimeout(u,1000);}u();
+let s=60, el=document.getElementById('countdown');
+function upd(){ el.innerText = s; if(s-->0) setTimeout(upd,1000); }
+upd();
 </script>
 """
 components.html(countdown_html, height=70)
 
 # ----------- Title & Timestamp -----------
 st.title("📈 Multi-Timeframe TMV Stock Ranking Dashboard")
-now = datetime.now(pytz.timezone('Asia/Kolkata')).strftime("%d %b %Y, %I:%M %p IST")
+now = datetime.now(pytz.timezone("Asia/Kolkata")).strftime("%d %b %Y, %I:%M %p IST")
 st.markdown(f"#### 🕒 Last Updated: {now}")
 
 # ----------- Load & Display TMV Data with Live LTP -----------
@@ -112,18 +115,19 @@ df = pd.read_csv(csv_url)
 if df.empty:
     st.warning("⚠️ Ranking sheet is empty.")
 else:
-    # Add live LTP from WebSocket or fallback
-    df['LTP'] = df['Symbol'].map(lambda s: ltp_ws.get(s) or
-                                kite.ltp([f"NSE:{s.replace('_','-')}"])[f"NSE:{s.replace('_','-')}"]['last_price'])
+    # Live LTP from WebSocket or fallback REST
+    def get_live_ltp(sym):
+        return ltp_ws.get(sym) or kite.ltp([f"NSE:{sym.replace('_','-')}"])[f"NSE:{sym.replace('_','-')}"]['last_price']
+    df["LTP"] = df["Symbol"].map(get_live_ltp)
     st.dataframe(df)
 
 # ----------- TMV Explainer -----------
-st.markdown('---')
-st.subheader('📘 TMV Explainer')
+st.markdown("---")
+st.subheader("📘 TMV Explainer")
 if not df.empty:
-    sel = st.selectbox('Select a stock', df['Symbol'].unique())
+    sel = st.selectbox("Select a stock", df["Symbol"].unique())
     if sel:
-        sym = sel.replace('_','-')
-        df15 = fetch_ohlc_data(sym, '15minute', 7)
+        sym = sel.replace("_", "-")
+        df15 = fetch_ohlc_data(sym, "15minute", 7)
         ind15 = calculate_indicators(df15)
         st.write(ind15)
