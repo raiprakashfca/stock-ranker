@@ -52,12 +52,11 @@ kt.connect(threaded=True)
 
 # ----------- Sidebar: Token Generator -----------
 with st.sidebar.expander("🔐 Zerodha Token Generator", expanded=False):
-    # Build the login URL with your exact redirect URI
     kc = KiteConnect(api_key=api_key)
-    login_url = kc.login_url(redirect_uri="https://stock-ranker-prakash.streamlit.app/")
-    st.sidebar.write(login_url)  # debug: shows the exact URL including redirect_uri
+    login_url = kc.login_url()  # no arguments
+    st.sidebar.write(login_url)  # debug: shows exact login URL
     st.markdown(
-        f"<a href='{login_url}' target='_blank'>👉 Login to Zerodha</a>",
+        f"<a href=\"{login_url}\" target=\"_blank\">👉 Login to Zerodha</a>",
         unsafe_allow_html=True
     )
     request_token = st.text_input("Paste Request Token Here")
@@ -92,13 +91,12 @@ components.html(
       let s=60, e=document.getElementById('cd');
       (function u(){ e.innerText=s; if(s-->0) setTimeout(u,1000); })();
     </script>
-    """,
-    height=60
+    """, height=60
 )
 
 # ----------- Title & Timestamp -----------
 st.title("📈 Multi-Timeframe TMV Stock Ranking Dashboard")
-now = datetime.now(pytz.timezone("Asia/Kolkata")).strftime("%d %b %Y, %I:%M %p IST")
+now = datetime.now(pytz.timezone('Asia/Kolkata')).strftime("%d %b %Y, %I:%M %p IST")
 st.markdown(f"#### 🕒 Last Updated: {now}")
 
 # ----------- Load & Display TMV Data with Live LTP -----------
@@ -111,22 +109,19 @@ df = pd.read_csv(csv_url)
 if df.empty:
     st.warning("⚠️ Ranking sheet is empty.")
 else:
-    # live LTP via WebSocket fallback to REST
-    def get_live_ltp(sym):
-        key = f"NSE:{sym.replace('_','-')}"
-        return ltp_ws.get(sym) or kite.ltp([key])[key]["last_price"]
-
-    df["LTP"] = df["Symbol"].map(get_live_ltp)
+    df['LTP'] = df['Symbol'].map(
+        lambda s: ltp_ws.get(s) or kite.ltp([f"NSE:{s.replace('_','-')}"])[f"NSE:{s.replace('_','-')}"]['last_price']
+    )
     st.dataframe(df)
 
 # ----------- TMV Explainer -----------
-st.markdown("---")
-st.subheader("📘 TMV Explainer")
+st.markdown('---')
+st.subheader('📘 TMV Explainer')
 if not df.empty:
-    sel = st.selectbox("Select a stock", df["Symbol"])
+    sel = st.selectbox('Select a stock', df['Symbol'])
     if sel:
-        sym = sel.replace("_", "-")
-        df15 = fetch_ohlc_data(sym, "15minute", 7)
+        sym = sel.replace('_','-')
+        df15 = fetch_ohlc_data(sym, '15minute', 7)
         indicators = calculate_indicators(df15)
         for name, val in indicators.items():
             st.markdown(f"**{name}:** {round(val,3) if isinstance(val,(int,float)) else val}")
