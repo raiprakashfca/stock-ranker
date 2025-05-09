@@ -29,7 +29,6 @@ api_key, api_secret, access_token = get_creds()
 kite = KiteConnect(api_key=api_key)
 kite.set_access_token(access_token)
 
-# Build instrument-token map
 instruments = kite.instruments(exchange="NSE")
 instrument_map = {item["tradingsymbol"]: item["instrument_token"] for item in instruments}
 ltp_ws = {}
@@ -53,8 +52,8 @@ kt.connect(threaded=True)
 # ----------- Sidebar: Token Generator -----------
 with st.sidebar.expander("🔐 Zerodha Token Generator", expanded=False):
     kc = KiteConnect(api_key=api_key)
-    login_url = kc.login_url()  # no arguments
-    st.sidebar.write(login_url)  # debug: shows exact login URL
+    login_url = kc.login_url()
+    st.sidebar.write(login_url)  # Debug: show exact login URL
     st.markdown(
         f"<a href=\"{login_url}\" target=\"_blank\">👉 Login to Zerodha</a>",
         unsafe_allow_html=True
@@ -66,8 +65,9 @@ with st.sidebar.expander("🔐 Zerodha Token Generator", expanded=False):
             new_token = session_data["access_token"]
             save_token_to_gsheet(new_token)
             kite.set_access_token(new_token)
-            st.success("✅ Access Token saved. Reloading…")
-            st.experimental_rerun()
+            st.success("✅ Access Token saved successfully. Please refresh the app.")
+            # Reload page via JS
+            components.html("<script>window.location.reload();</script>", height=0)
         except Exception as e:
             st.error(f"❌ Failed to generate access token: {e}")
 
@@ -125,3 +125,4 @@ if not df.empty:
         indicators = calculate_indicators(df15)
         for name, val in indicators.items():
             st.markdown(f"**{name}:** {round(val,3) if isinstance(val,(int,float)) else val}")
+'}]}
