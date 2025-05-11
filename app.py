@@ -53,7 +53,7 @@ kt.connect(threaded=True)
 # ----------- Sidebar: Zerodha Token Generator -----------
 with st.sidebar.expander("🔐 Zerodha Token Generator", expanded=False):
     kc = KiteConnect(api_key=api_key)
-    login_url = kc.login_url(redirect_uri="https://stock-ranker-prakash.streamlit.app/")
+    login_url = kc.login_url()
     st.sidebar.write(login_url)  # Debug: exact login URL
     st.markdown(
         f'<a href="{login_url}" target="_blank">👉 Login to Zerodha</a>',
