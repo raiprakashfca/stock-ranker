@@ -25,10 +25,11 @@ def get_creds():
 
 api_key, api_secret, access_token = get_creds()
 
-# ----------- Initialize Kite Client & WebSocket -----------
+# ----------- Initialize Kite Client  -----------
 kite = KiteConnect(api_key=api_key)
 kite.set_access_token(access_token)
 
+# ----------- WebSocket Setup for LTP  -----------
 instruments = kite.instruments(exchange="NSE")
 instrument_map = {item["tradingsymbol"]: item["instrument_token"] for item in instruments}
 ltp_ws = {}
@@ -49,13 +50,13 @@ kt.on_ticks = on_ticks
 kt.on_connect = on_connect
 kt.connect(threaded=True)
 
-# ----------- Sidebar: Token Generator -----------
+# ----------- Sidebar: Zerodha Token Generator -----------
 with st.sidebar.expander("🔐 Zerodha Token Generator", expanded=False):
     kc = KiteConnect(api_key=api_key)
-    login_url = kc.login_url()
-    st.sidebar.write(login_url)  # Debug: show exact login URL
+    login_url = kc.login_url(redirect_uri="https://stock-ranker-prakash.streamlit.app/")
+    st.sidebar.write(login_url)  # Debug: exact login URL
     st.markdown(
-        f"<a href=\"{login_url}\" target=\"_blank\">👉 Login to Zerodha</a>",
+        f'<a href="{login_url}" target="_blank">👉 Login to Zerodha</a>',
         unsafe_allow_html=True
     )
     request_token = st.text_input("Paste Request Token Here")
@@ -65,13 +66,12 @@ with st.sidebar.expander("🔐 Zerodha Token Generator", expanded=False):
             new_token = session_data["access_token"]
             save_token_to_gsheet(new_token)
             kite.set_access_token(new_token)
-            st.success("✅ Access Token saved successfully. Please refresh the app.")
-            # Reload page via JS
-            components.html("<script>window.location.reload();</script>", height=0)
+            st.success("✅ Access Token saved successfully. Please refresh the page.")
+            components.html('<script>window.location.reload();</script>', height=0)
         except Exception as e:
             st.error(f"❌ Failed to generate access token: {e}")
 
-# ----------- Validate Token -----------
+# ----------- Validate Token  -----------
 try:
     profile = kite.profile()
     st.sidebar.success(f"🔐 Token verified: {profile['user_name']} ({profile['user_id']})")
@@ -84,22 +84,24 @@ st.sidebar.info("🔄 Auto-refresh every 1 min. 🕒 Last Updated shown below.")
 
 # ----------- Auto-Refresh & Countdown -----------
 st_autorefresh(interval=60000, key="refresh")
-components.html(
-    """
-    <div style='font-size:14px;color:gray;'>Next refresh in <span id='cd'></span> seconds.</div>
-    <script>
-      let s=60, e=document.getElementById('cd');
-      (function u(){ e.innerText=s; if(s-->0) setTimeout(u,1000); })();
-    </script>
-    """, height=60
-)
+countdown_html = """
+<div style='font-size:14px;color:gray;'>
+Next refresh in <span id='cd'></span> seconds.
+</div>
+<script>
+let s=60;
+const e=document.getElementById('cd');
+(function u(){ e.innerText = s; if(s-->0) setTimeout(u,1000); })();
+</script>
+"""
+components.html(countdown_html, height=60)
 
-# ----------- Title & Timestamp -----------
+# ----------- Title & Timestamp  -----------
 st.title("📈 Multi-Timeframe TMV Stock Ranking Dashboard")
 now = datetime.now(pytz.timezone('Asia/Kolkata')).strftime("%d %b %Y, %I:%M %p IST")
 st.markdown(f"#### 🕒 Last Updated: {now}")
 
-# ----------- Load & Display TMV Data with Live LTP -----------
+# ----------- Load & Display TMV Data with Live LTP  -----------
 csv_url = (
     "https://docs.google.com/spreadsheets/d/"
     "1Cpgj1M_ofN1SqvuqDDHuN7Gy17tfkhy4fCCP8Mx7bRI/"
@@ -109,20 +111,20 @@ df = pd.read_csv(csv_url)
 if df.empty:
     st.warning("⚠️ Ranking sheet is empty.")
 else:
-    df['LTP'] = df['Symbol'].map(
-        lambda s: ltp_ws.get(s) or kite.ltp([f"NSE:{s.replace('_','-')}"])[f"NSE:{s.replace('_','-')}"]['last_price']
-    )
+    def get_live_ltp(sym):
+        key = f"NSE:{sym.replace('_','-')}"
+        return ltp_ws.get(sym) or kite.ltp([key])[key]["last_price"]
+    df['LTP'] = df['Symbol'].map(get_live_ltp)
     st.dataframe(df)
 
-# ----------- TMV Explainer -----------
+# ----------- TMV Explainer  -----------
 st.markdown('---')
 st.subheader('📘 TMV Explainer')
 if not df.empty:
     sel = st.selectbox('Select a stock', df['Symbol'])
     if sel:
-        sym = sel.replace('_','-')
-        df15 = fetch_ohlc_data(sym, '15minute', 7)
+        sym2 = sel.replace('_','-')
+        df15 = fetch_ohlc_data(sym2, '15minute', 7)
         indicators = calculate_indicators(df15)
         for name, val in indicators.items():
             st.markdown(f"**{name}:** {round(val,3) if isinstance(val,(int,float)) else val}")
-'}]}
