@@ -14,7 +14,8 @@ from utils.token_utils import load_credentials_from_gsheet, save_token_to_gsheet
 st.set_page_config(page_title="📊 TMV Stock Ranking", layout="wide")
 
 # ----------- Load Zerodha Credentials (cached) -----------
-@st.cache_data(ttl=86400)
+# Cache credentials for 15 minutes to balance freshness and quota usage
+@st.cache_data(ttl=900)
 def get_creds():
     from gspread.exceptions import APIError
     try:
