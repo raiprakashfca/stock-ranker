@@ -1,7 +1,7 @@
 import pandas as pd
 import gspread
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from kiteconnect import KiteConnect
 from oauth2client.service_account import ServiceAccountCredentials
 from indicators import calculate_scores
@@ -11,32 +11,23 @@ import schedule
 import pytz
 import time
 import holidays
+import sys
+import os
+import json
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Load credentials from secrets (assuming Streamlit-style TOML)
-creds_dict = {
-    # replace with actual secret loading logic in deployment
-    "type": "service_account",
-    "project_id": "your_project_id",
-    "private_key_id": "your_key_id",
-    "private_key": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n",
-    "client_email": "your_email@project.iam.gserviceaccount.com",
-    "client_id": "your_client_id",
-    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-    "token_uri": "https://oauth2.googleapis.com/token",
-    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-    "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/your_email%40project.iam.gserviceaccount.com"
-}
+# Load credentials from environment variable
+creds_dict = json.loads(os.environ["GSPREAD_CREDENTIALS_JSON"])
 
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
 client = gspread.authorize(creds)
 
-# Load API key/token from Google Sheet
-token_sheet = client.open("ZerodhaTokenStore").sheet1
-api_key, _, access_token = token_sheet.get_all_values()[0][:3]
+# Load API key/token from environment
+api_key = os.environ["Z_API_KEY"]
+access_token = os.environ["Z_ACCESS_TOKEN"]
 
 kite = KiteConnect(api_key=api_key)
 kite.set_access_token(access_token)
@@ -61,11 +52,11 @@ def is_market_open():
 
     return market_open <= now <= market_close
 
-def run_updater():
+def run_updater(days_back=2):
     records = []
     for symbol in symbols:
         try:
-            df_ohlc = get_stock_data(kite, symbol, interval="15minute", days=2)
+            df_ohlc = get_stock_data(kite, symbol, interval="15minute", days=days_back)
             if df_ohlc.empty:
                 logger.warning(f"⚠️ No data for {symbol}")
                 continue
@@ -92,6 +83,11 @@ def job():
         run_updater()
     else:
         print("🛌 Market is closed. Skipping run.")
+
+if len(sys.argv) > 1 and sys.argv[1] == "test":
+    print("🔬 Running in test mode using yesterday's data...")
+    run_updater(days_back=3)
+    sys.exit()
 
 schedule.every(15).minutes.do(job)
 print("📆 TMV updater scheduler started (IST)...")
