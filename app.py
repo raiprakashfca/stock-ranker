@@ -6,15 +6,19 @@ from datetime import datetime
 from kiteconnect import KiteConnect, KiteTicker
 from streamlit_autorefresh import st_autorefresh
 import streamlit.components.v1 as components
+import logging
 
 from fetch_ohlc import fetch_ohlc_data, calculate_indicators
 from utils.token_utils import load_credentials_from_gsheet, save_token_to_gsheet
 
+# ----------- Setup Logging -----------
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 # ----------- Streamlit Page Config -----------
 st.set_page_config(page_title="📊 TMV Stock Ranking", layout="wide")
 
-# ----------- Load Zerodha Credentials (cached) -----------
-# Cache credentials for 15 minutes to balance freshness and quota usage
+# ----------- Load Zerodha Credentials -----------
 @st.cache_data(ttl=900)
 def get_creds():
     from gspread.exceptions import APIError
@@ -26,11 +30,11 @@ def get_creds():
 
 api_key, api_secret, access_token = get_creds()
 
-# ----------- Initialize Kite Client  -----------
+# ----------- Initialize Kite Client -----------
 kite = KiteConnect(api_key=api_key)
 kite.set_access_token(access_token)
 
-# ----------- WebSocket Setup for LTP  -----------
+# ----------- WebSocket LTP Setup -----------
 instruments = kite.instruments(exchange="NSE")
 instrument_map = {item["tradingsymbol"]: item["instrument_token"] for item in instruments}
 ltp_ws = {}
@@ -55,11 +59,8 @@ kt.connect(threaded=True)
 with st.sidebar.expander("🔐 Zerodha Token Generator", expanded=False):
     kc = KiteConnect(api_key=api_key)
     login_url = kc.login_url()
-    st.sidebar.write(login_url)  # Debug: exact login URL
-    st.markdown(
-        f'<a href="{login_url}" target="_blank">👉 Login to Zerodha</a>',
-        unsafe_allow_html=True
-    )
+    st.sidebar.write(login_url)
+    st.markdown(f'<a href="{login_url}" target="_blank">👉 Login to Zerodha</a>', unsafe_allow_html=True)
     request_token = st.text_input("Paste Request Token Here")
     if st.button("Generate Access Key"):
         try:
@@ -72,18 +73,19 @@ with st.sidebar.expander("🔐 Zerodha Token Generator", expanded=False):
         except Exception as e:
             st.error(f"❌ Failed to generate access token: {e}")
 
-# ----------- Validate Token  -----------
+# ----------- Token Validation -----------
 try:
     profile = kite.profile()
-    st.sidebar.success(f"🔐 Token verified: {profile['user_name']} ({profile['user_id']})")
+    st.sidebar.success(f"🔐 Token OK: {profile['user_name']} ({profile['user_id']})")
 except Exception as e:
-    st.sidebar.error(f"❌ Token verification failed: {e}")
+    st.sidebar.markdown("### ❌ ZERODHA TOKEN INVALID")
+    st.sidebar.error(f"Details: {e}")
     st.stop()
 
 st.sidebar.markdown("---")
 st.sidebar.info("🔄 Auto-refresh every 1 min. 🕒 Last Updated shown below.")
 
-# ----------- Auto-Refresh & Countdown -----------
+# ----------- Auto-Refresh -----------
 st_autorefresh(interval=60000, key="refresh")
 countdown_html = """
 <div style='font-size:14px;color:gray;'>
@@ -97,28 +99,41 @@ const e=document.getElementById('cd');
 """
 components.html(countdown_html, height=60)
 
-# ----------- Title & Timestamp  -----------
+# ----------- Title & Timestamp -----------
 st.title("📈 Multi-Timeframe TMV Stock Ranking Dashboard")
 now = datetime.now(pytz.timezone('Asia/Kolkata')).strftime("%d %b %Y, %I:%M %p IST")
 st.markdown(f"#### 🕒 Last Updated: {now}")
 
-# ----------- Load & Display TMV Data with Live LTP  -----------
-csv_url = (
-    "https://docs.google.com/spreadsheets/d/"
-    "1Cpgj1M_ofN1SqvuqDDHuN7Gy17tfkhy4fCCP8Mx7bRI/"
-    "export?format=csv&gid=0"
-)
-df = pd.read_csv(csv_url)
-if df.empty:
-    st.warning("⚠️ Ranking sheet is empty.")
-else:
-    def get_live_ltp(sym):
-        key = f"NSE:{sym.replace('_','-')}"
-        return ltp_ws.get(sym) or kite.ltp([key])[key]["last_price"]
-    df['LTP'] = df['Symbol'].map(get_live_ltp)
-    st.dataframe(df)
+# ----------- Load & Display TMV Data -----------
+csv_url = "https://docs.google.com/spreadsheets/d/1Cpgj1M_ofN1SqvuqDDHuN7Gy17tfkhy4fCCP8Mx7bRI/export?format=csv&gid=0"
+try:
+    df = pd.read_csv(csv_url)
+    if df.empty or 'Symbol' not in df.columns:
+        st.error("❌ LiveScores sheet is empty or invalid.")
+        st.stop()
+except Exception as e:
+    st.error(f"❌ Error reading Google Sheet: {e}")
+    st.stop()
 
-# ----------- TMV Explainer  -----------
+# ----------- Live LTP Function -----------
+def get_live_ltp(sym):
+    key = f"NSE:{sym.replace('_','-')}"
+    try:
+        if sym in ltp_ws and isinstance(ltp_ws[sym], (int, float)):
+            return ltp_ws[sym]
+        else:
+            ltp = kite.ltp([key])
+            val = ltp[key]["last_price"]
+            logger.info(f"Fetched fallback LTP for {sym}: {val}")
+            return val
+    except Exception as e:
+        logger.warning(f"⚠️ Failed to fetch LTP for {sym}: {e}")
+        return np.nan
+
+df['LTP'] = df['Symbol'].map(get_live_ltp)
+st.dataframe(df)
+
+# ----------- TMV Explainer -----------
 st.markdown('---')
 st.subheader('📘 TMV Explainer')
 if not df.empty:
