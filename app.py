@@ -7,6 +7,11 @@ from kiteconnect import KiteConnect, KiteTicker
 from streamlit_autorefresh import st_autorefresh
 import streamlit.components.v1 as components
 import logging
+from utils.token_panel import render_token_panel
+
+access_token = render_token_panel()
+if not access_token:
+    st.stop()
 
 from fetch_ohlc import fetch_ohlc_data, calculate_indicators
 from utils.token_utils import load_credentials_from_gsheet, save_token_to_gsheet
