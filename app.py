@@ -11,6 +11,10 @@ from kiteconnect import KiteConnect
 from utils.token_panel import render_token_panel
 from utils.token_utils import load_credentials_from_gsheet
 
+fresh_ok = not looks_stale(df)
+badge = "🟢 LIVE" if fresh_ok else "🔴 STALE"
+st.markdown(f"### Data Status: {badge}")
+
 # -----------------------------------
 # Streamlit Page Config
 # -----------------------------------
@@ -73,6 +77,38 @@ components.html(
     """,
     height=60
 )
+# --- Freshness Inspector ---
+st.sidebar.markdown("### ✅ Data Freshness")
+from datetime import datetime, timezone
+import pytz
+
+# 1) Show token expiry (already fetched as expiry_time if present)
+if expiry_time:
+    st.sidebar.caption(f"🔐 Zerodha access token valid until (Sheet D1): {expiry_time}")
+
+# 2) Read a 'last updated' timestamp from your LiveScores sheet (optional)
+#    If you have a cell that your generator script writes (e.g., H1), show it.
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials
+    sa_json = json.loads(st.secrets["GOOGLE_SERVICE_ACCOUNT_JSON"])
+    creds = Credentials.from_service_account_info(
+        sa_json,
+        scopes=["https://www.googleapis.com/auth/spreadsheets","https://www.googleapis.com/auth/drive"]
+    )
+    gc = gspread.authorize(creds)
+    # Replace SHEET_ID and GID lookups with your actual sheet if you want to read H1 directly.
+    # We’ll read H1 from the same ZerodhaTokenStore for simplicity, or point to your LiveScores book.
+    ws_ls = gc.open_by_url(os.getenv("LIVE_SCORES_CSV_URL","").replace("/export?format=csv","/edit")).sheet1
+    last_updated_cell = None
+    try:
+        last_updated_cell = ws_ls.acell("H1").value  # <- make your writer populate this
+    except Exception:
+        pass
+    if last_updated_cell:
+        st.sidebar.caption(f"📅 TMV sheet last updated (H1): {last_updated_cell}")
+except Exception as e:
+    st.sidebar.caption(f"ℹ️ Freshness meta not available: {e}")
 
 # -----------------------------------
 # Title & Timestamp
@@ -121,6 +157,36 @@ symbols = df["Symbol"].dropna().astype(str).tolist()
 ltp_map = fetch_ltp_batch(symbols)
 df["LTP"] = df["Symbol"].map(lambda s: ltp_map.get(s, np.nan))
 st.dataframe(df, use_container_width=True)
+# After: df = pd.read_csv(csv_url)
+# Guardrail: if df has a timestamp column, enforce “today”
+import pandas as pd
+IST = pytz.timezone("Asia/Kolkata")
+
+def looks_stale(df: pd.DataFrame) -> bool:
+    # Heuristics—adapt to your schema.
+    # 1) If a LastUpdated column exists, check date
+    for col in ["LastUpdated", "UpdatedAt", "RunDate"]:
+        if col in df.columns:
+            try:
+                ts = pd.to_datetime(df[col].iloc[0], errors="coerce")
+                if pd.isna(ts):
+                    continue
+                now_ist = datetime.now(IST).date()
+                return ts.tz_localize(IST, nonexistent="shift_forward", ambiguous="NaT").date() != now_ist
+            except Exception:
+                pass
+    # 2) If no timestamp column, rely on price motion + row count sanity, tweak thresholds to taste
+    if "LTP" in df.columns:
+        # If literally all LTPs are NaN or zero → clearly stale
+        if df["LTP"].isna().all() or (df["LTP"] == 0).all():
+            return True
+    # Add more heuristics if needed.
+    return False
+
+if looks_stale(df):
+    st.warning("⚠️ The TMV table looks stale (missing recent timestamp or all LTPs blank). Check your Sheet updater job.")
+# After writing the table to the LiveScores tab:
+ws.update_acell("H1", datetime.now(pytz.timezone("Asia/Kolkata")).isoformat(timespec="seconds"))
 
 # -----------------------------------
 # TMV Explainer
