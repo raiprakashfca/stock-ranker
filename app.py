@@ -11,30 +11,37 @@ from kiteconnect import KiteConnect
 from utils.token_panel import render_token_panel
 from utils.token_utils import load_credentials_from_gsheet
 
-fresh_ok = not looks_stale(df)
-badge = "🟢 LIVE" if fresh_ok else "🔴 STALE"
-st.markdown(f"### Data Status: {badge}")
+# -----------------------------
+# Make Streamlit secrets visible to modules that read env vars
+# (token_panel expects env keys)
+# -----------------------------
+if "ZERODHA_TOKEN_SHEET_KEY" in st.secrets:
+    os.environ["ZERODHA_TOKEN_SHEET_KEY"] = st.secrets["ZERODHA_TOKEN_SHEET_KEY"]
+if "GOOGLE_SERVICE_ACCOUNT_JSON" in st.secrets:
+    os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"] = st.secrets["GOOGLE_SERVICE_ACCOUNT_JSON"]
+if "LIVE_SCORES_CSV_URL" in st.secrets:
+    os.environ["LIVE_SCORES_CSV_URL"] = st.secrets["LIVE_SCORES_CSV_URL"]
 
-# -----------------------------------
-# Streamlit Page Config
-# -----------------------------------
+# -----------------------------
+# Page & logging
+# -----------------------------
 st.set_page_config(page_title="📊 TMV Stock Ranking", layout="wide")
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("tmv_app")
 
-# -----------------------------------
-# Try existing token from Google Sheet first
-# -----------------------------------
+# -----------------------------
+# Use existing token from Google Sheet if possible
+# -----------------------------
 api_key, api_secret, access_token = load_credentials_from_gsheet()
 kite = KiteConnect(api_key=api_key)
-token_valid = False
 expiry_time = None
 
 try:
+    # Try stored token
     kite.set_access_token(access_token)
     profile = kite.profile()
-    token_valid = True
-    # Try to fetch expiry info from sheet (optional)
+
+    # Read token expiry info (D1) from ZerodhaTokenStore (nice-to-have)
     import gspread
     from google.oauth2.service_account import Credentials
     sa_json = json.loads(st.secrets["GOOGLE_SERVICE_ACCOUNT_JSON"])
@@ -43,25 +50,27 @@ try:
         scopes=["https://www.googleapis.com/auth/spreadsheets","https://www.googleapis.com/auth/drive"]
     )
     gc = gspread.authorize(creds)
-    ws = gc.open("ZerodhaTokenStore").worksheet("Sheet1")
-    expiry_time = ws.acell("D1").value
+    ws_token = gc.open("ZerodhaTokenStore").worksheet("Sheet1")
+    expiry_time = ws_token.acell("D1").value
+
     st.sidebar.success(f"🔐 Token OK: {profile['user_name']} ({profile['user_id']})")
     if expiry_time:
         st.sidebar.info(f"⏳ Token valid until: {expiry_time}")
+
 except Exception as e:
+    # Fallback to login+paste panel
     st.sidebar.warning("⚠️ Stored token invalid or expired. Please log in again.")
-    logger.warning(f"Token check failed: {e}")
     access_token = render_token_panel()
     if not access_token:
         st.stop()
+
     kite.set_access_token(access_token)
     profile = kite.profile()
-    token_valid = True
     st.sidebar.success(f"🔐 Token refreshed for {profile['user_name']} ({profile['user_id']})")
 
-# -----------------------------------
-# Auto-refresh timer
-# -----------------------------------
+# -----------------------------
+# Sidebar: auto-refresh
+# -----------------------------
 st.sidebar.markdown("---")
 st.sidebar.info("🔄 Auto-refresh every 1 min. 🕒 Last Updated shown below.")
 st_autorefresh(interval=60_000, key="refresh")
@@ -77,49 +86,17 @@ components.html(
     """,
     height=60
 )
-# --- Freshness Inspector ---
-st.sidebar.markdown("### ✅ Data Freshness")
-from datetime import datetime, timezone
-import pytz
 
-# 1) Show token expiry (already fetched as expiry_time if present)
-if expiry_time:
-    st.sidebar.caption(f"🔐 Zerodha access token valid until (Sheet D1): {expiry_time}")
-
-# 2) Read a 'last updated' timestamp from your LiveScores sheet (optional)
-#    If you have a cell that your generator script writes (e.g., H1), show it.
-try:
-    import gspread
-    from google.oauth2.service_account import Credentials
-    sa_json = json.loads(st.secrets["GOOGLE_SERVICE_ACCOUNT_JSON"])
-    creds = Credentials.from_service_account_info(
-        sa_json,
-        scopes=["https://www.googleapis.com/auth/spreadsheets","https://www.googleapis.com/auth/drive"]
-    )
-    gc = gspread.authorize(creds)
-    # Replace SHEET_ID and GID lookups with your actual sheet if you want to read H1 directly.
-    # We’ll read H1 from the same ZerodhaTokenStore for simplicity, or point to your LiveScores book.
-    ws_ls = gc.open_by_url(os.getenv("LIVE_SCORES_CSV_URL","").replace("/export?format=csv","/edit")).sheet1
-    last_updated_cell = None
-    try:
-        last_updated_cell = ws_ls.acell("H1").value  # <- make your writer populate this
-    except Exception:
-        pass
-    if last_updated_cell:
-        st.sidebar.caption(f"📅 TMV sheet last updated (H1): {last_updated_cell}")
-except Exception as e:
-    st.sidebar.caption(f"ℹ️ Freshness meta not available: {e}")
-
-# -----------------------------------
-# Title & Timestamp
-# -----------------------------------
+# -----------------------------
+# Title & timestamp
+# -----------------------------
 st.title("📈 Multi-Timeframe TMV Stock Ranking Dashboard")
 now = datetime.now(pytz.timezone("Asia/Kolkata")).strftime("%d %b %Y, %I:%M %p IST")
 st.markdown(f"#### 🕒 Last Updated: {now}")
 
-# -----------------------------------
+# -----------------------------
 # Load TMV Scores CSV
-# -----------------------------------
+# -----------------------------
 csv_url = os.getenv(
     "LIVE_SCORES_CSV_URL",
     "https://docs.google.com/spreadsheets/d/1Cpgj1M_ofN1SqvuqDDHuN7Gy17tfkhy4fCCP8Mx7bRI/export?format=csv&gid=0"
@@ -133,9 +110,35 @@ except Exception as e:
     st.error(f"❌ Error reading Google Sheet: {e}")
     st.stop()
 
-# -----------------------------------
-# Fetch LTPs
-# -----------------------------------
+# -----------------------------
+# Freshness utilities
+# -----------------------------
+IST = pytz.timezone("Asia/Kolkata")
+
+def looks_stale(df_in: pd.DataFrame) -> bool:
+    """
+    Heuristics:
+      1) If a timestamp column exists (LastUpdated/UpdatedAt/RunDate), ensure it's today IST.
+      2) If no timestamp column, check if all LTP are NaN/0 after LTP fill.
+    """
+    for col in ["LastUpdated", "UpdatedAt", "RunDate"]:
+        if col in df_in.columns:
+            try:
+                ts = pd.to_datetime(df_in[col].iloc[0], errors="coerce")
+                if pd.isna(ts):
+                    continue
+                # localize if naive
+                if ts.tzinfo is None:
+                    ts = IST.localize(ts)
+                return ts.astimezone(IST).date() != datetime.now(IST).date()
+            except Exception:
+                pass
+    # If we get here, we'll re-check after LTP fill (below).
+    return False  # provisional
+
+# -----------------------------
+# Fetch LTPs (batch)
+# -----------------------------
 def fetch_ltp_batch(symbols):
     if not symbols:
         return {}
@@ -156,41 +159,46 @@ def fetch_ltp_batch(symbols):
 symbols = df["Symbol"].dropna().astype(str).tolist()
 ltp_map = fetch_ltp_batch(symbols)
 df["LTP"] = df["Symbol"].map(lambda s: ltp_map.get(s, np.nan))
+
+# After LTPs arrive, finalize freshness decision
+fresh_ok = not looks_stale(df)
+if "LTP" in df.columns:
+    if df["LTP"].isna().all() or (df["LTP"] == 0).all():
+        fresh_ok = False
+
+badge = "🟢 LIVE" if fresh_ok else "🔴 STALE"
+st.markdown(f"### Data Status: {badge}")
+
+# Optional: show a sheet-level "last updated" if your writer sets H1
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials
+    sa_json = json.loads(st.secrets["GOOGLE_SERVICE_ACCOUNT_JSON"])
+    creds = Credentials.from_service_account_info(
+        sa_json,
+        scopes=["https://www.googleapis.com/auth/spreadsheets","https://www.googleapis.com/auth/drive"]
+    )
+    gc = gspread.authorize(creds)
+    # Convert CSV export URL to edit URL to read cells (works for published sheets)
+    edit_url = csv_url.replace("/export?format=csv", "/edit")
+    ws_ls = gc.open_by_url(edit_url).sheet1
+    try:
+        last_updated_cell = ws_ls.acell("H1").value  # <-- have your writer populate this
+        if last_updated_cell:
+            st.sidebar.caption(f"📅 TMV sheet last updated (H1): {last_updated_cell}")
+    except Exception:
+        pass
+except Exception as e:
+    st.sidebar.caption(f"ℹ️ Freshness meta not available: {e}")
+
+# -----------------------------
+# Display table
+# -----------------------------
 st.dataframe(df, use_container_width=True)
-# After: df = pd.read_csv(csv_url)
-# Guardrail: if df has a timestamp column, enforce “today”
-import pandas as pd
-IST = pytz.timezone("Asia/Kolkata")
 
-def looks_stale(df: pd.DataFrame) -> bool:
-    # Heuristics—adapt to your schema.
-    # 1) If a LastUpdated column exists, check date
-    for col in ["LastUpdated", "UpdatedAt", "RunDate"]:
-        if col in df.columns:
-            try:
-                ts = pd.to_datetime(df[col].iloc[0], errors="coerce")
-                if pd.isna(ts):
-                    continue
-                now_ist = datetime.now(IST).date()
-                return ts.tz_localize(IST, nonexistent="shift_forward", ambiguous="NaT").date() != now_ist
-            except Exception:
-                pass
-    # 2) If no timestamp column, rely on price motion + row count sanity, tweak thresholds to taste
-    if "LTP" in df.columns:
-        # If literally all LTPs are NaN or zero → clearly stale
-        if df["LTP"].isna().all() or (df["LTP"] == 0).all():
-            return True
-    # Add more heuristics if needed.
-    return False
-
-if looks_stale(df):
-    st.warning("⚠️ The TMV table looks stale (missing recent timestamp or all LTPs blank). Check your Sheet updater job.")
-# After writing the table to the LiveScores tab:
-ws.update_acell("H1", datetime.now(pytz.timezone("Asia/Kolkata")).isoformat(timespec="seconds"))
-
-# -----------------------------------
-# TMV Explainer
-# -----------------------------------
+# -----------------------------
+# TMV Explainer (on-demand live OHLC)
+# -----------------------------
 from fetch_ohlc import fetch_ohlc_data, calculate_indicators
 st.markdown("---")
 st.subheader("📘 TMV Explainer")
