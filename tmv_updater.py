@@ -2,12 +2,13 @@
 """
 One-shot TMV updater.
 
-- Reads list of symbols from a Google Sheet (e.g., 'BackgroundAnalysisStore').
-- Fetches OHLC data for each.
-- Computes TMV scores via utils.indicators.
-- Logs results to 'Stock Rankings' or 'BackgroundAnalysisStore'.
+- Reads list of symbols from BackgroundAnalysisStore → Watchlist.
+- Fetches OHLC data.
+- Computes TMV scores.
+- Adds IST timestamp to each row as `AsOf`.
+- Logs results back to BackgroundAnalysisStore → LiveScores.
 
-Schedule via cron / GitHub Actions instead of an internal while-loop.
+Scheduled via cron / GitHub Actions.
 """
 
 import logging
@@ -15,27 +16,29 @@ from datetime import datetime
 from typing import List
 
 import pandas as pd
+import pytz
 
 from utils.google_client import get_gspread_client
 from utils.ohlc import fetch_ohlc
 from utils.indicators import calculate_scores
 from utils.sheet_logger import log_to_google_sheets
 
-
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("tmv_updater")
 
+IST = pytz.timezone("Asia/Kolkata")
 
 WATCHLIST_WORKBOOK = "BackgroundAnalysisStore"
-WATCHLIST_SHEET = "Watchlist"  # adjust to your actual tab
+WATCHLIST_SHEET = "Watchlist"
 OUTPUT_WORKBOOK = "BackgroundAnalysisStore"
-OUTPUT_SHEET = "LiveScores"    # adjust to your actual tab
+OUTPUT_SHEET = "LiveScores"
 
 
 def load_watchlist_symbols() -> List[str]:
     client = get_gspread_client()
     ws = client.open(WATCHLIST_WORKBOOK).worksheet(WATCHLIST_SHEET)
     values = ws.get_all_values()
+
     symbols: List[str] = []
     for row in values[1:]:
         if not row:
@@ -43,14 +46,17 @@ def load_watchlist_symbols() -> List[str]:
         sym = (row[0] or "").strip().upper()
         if sym:
             symbols.append(sym)
+
     return symbols
 
 
 def compute_tmv_table(symbols: List[str]) -> pd.DataFrame:
     rows = []
+    as_of = datetime.now(IST).replace(microsecond=0).isoformat()
+
     for sym in symbols:
         try:
-            df_ohlc = fetch_ohlc(sym, interval="15minute", days=5)
+            df_ohlc = fetch_ohlc(sym, interval="15minute", days=7)
             if df_ohlc.empty:
                 logger.warning("No OHLC for %s", sym)
                 continue
@@ -62,8 +68,10 @@ def compute_tmv_table(symbols: List[str]) -> pd.DataFrame:
 
             row = {"Symbol": sym}
             row.update(scores)
-            row["AsOf"] = datetime.now().isoformat(timespec="seconds")
+            row["AsOf"] = as_of  # IST timestamp added to every row
+
             rows.append(row)
+
         except Exception as e:
             logger.exception("Error computing TMV for %s: %s", sym, e)
 
@@ -72,9 +80,10 @@ def compute_tmv_table(symbols: List[str]) -> pd.DataFrame:
 
 def main():
     logger.info("Starting TMV updater...")
+
     symbols = load_watchlist_symbols()
     if not symbols:
-        logger.warning("No symbols in TMV watchlist.")
+        logger.warning("TMV updater found no symbols in watchlist.")
         return
 
     df = compute_tmv_table(symbols)
@@ -88,6 +97,7 @@ def main():
         df=df,
         clear=True,
     )
+
     logger.info("TMV updater completed with %d rows.", len(df))
 
 
