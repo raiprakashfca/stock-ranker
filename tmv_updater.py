@@ -1,97 +1,95 @@
-import pandas as pd
-import gspread
+# tmv_updater.py
+"""
+One-shot TMV updater.
+
+- Reads list of symbols from a Google Sheet (e.g., 'BackgroundAnalysisStore').
+- Fetches OHLC data for each.
+- Computes TMV scores via utils.indicators.
+- Logs results to 'Stock Rankings' or 'BackgroundAnalysisStore'.
+
+Schedule via cron / GitHub Actions instead of an internal while-loop.
+"""
+
 import logging
-from datetime import datetime, timedelta
-from kiteconnect import KiteConnect
-from oauth2client.service_account import ServiceAccountCredentials
-from indicators import calculate_scores
-from zerodha import get_stock_data
-from sheet_logger import log_to_google_sheets
-import schedule
-import pytz
-import time
-import holidays
-import sys
-import os
-import json
+from datetime import datetime
+from typing import List
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+import pandas as pd
 
-# Load credentials from environment variable
-creds_dict = json.loads(os.environ["GSPREAD_CREDENTIALS_JSON"])
+from utils.google_client import get_gspread_client
+from utils.ohlc import fetch_ohlc
+from utils.indicators import calculate_scores
+from utils.sheet_logger import log_to_google_sheets
 
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-client = gspread.authorize(creds)
 
-# Load API key/token from environment
-api_key = os.environ["Z_API_KEY"]
-access_token = os.environ["Z_ACCESS_TOKEN"]
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger("tmv_updater")
 
-kite = KiteConnect(api_key=api_key)
-kite.set_access_token(access_token)
 
-# Get symbol list from Google Sheet
-ltp_sheet = client.open("LiveLTPStore").sheet1
-symbols = [row[0] for row in ltp_sheet.get_all_values()[1:] if row]
+WATCHLIST_WORKBOOK = "BackgroundAnalysisStore"
+WATCHLIST_SHEET = "Watchlist"  # adjust to your actual tab
+OUTPUT_WORKBOOK = "BackgroundAnalysisStore"
+OUTPUT_SHEET = "LiveScores"    # adjust to your actual tab
 
-def is_market_open():
-    india = pytz.timezone("Asia/Kolkata")
-    now = datetime.now(india)
 
-    if now.weekday() >= 5:
-        return False
+def load_watchlist_symbols() -> List[str]:
+    client = get_gspread_client()
+    ws = client.open(WATCHLIST_WORKBOOK).worksheet(WATCHLIST_SHEET)
+    values = ws.get_all_values()
+    symbols: List[str] = []
+    for row in values[1:]:
+        if not row:
+            continue
+        sym = (row[0] or "").strip().upper()
+        if sym:
+            symbols.append(sym)
+    return symbols
 
-    indian_holidays = holidays.India()
-    if now.date() in indian_holidays:
-        return False
 
-    market_open = now.replace(hour=9, minute=15, second=0, microsecond=0)
-    market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
-
-    return market_open <= now <= market_close
-
-def run_updater(days_back=2):
-    records = []
-    for symbol in symbols:
+def compute_tmv_table(symbols: List[str]) -> pd.DataFrame:
+    rows = []
+    for sym in symbols:
         try:
-            df_ohlc = get_stock_data(kite, symbol, interval="15minute", days=days_back)
+            df_ohlc = fetch_ohlc(sym, interval="15minute", days=5)
             if df_ohlc.empty:
-                logger.warning(f"⚠️ No data for {symbol}")
+                logger.warning("No OHLC for %s", sym)
                 continue
 
             scores = calculate_scores(df_ohlc)
-            scores["Symbol"] = symbol
-            records.append(scores)
-            logger.info(f"✅ Processed {symbol}: {scores['TMV Score']}")
+            if not scores:
+                logger.warning("No TMV scores for %s", sym)
+                continue
+
+            row = {"Symbol": sym}
+            row.update(scores)
+            row["AsOf"] = datetime.now().isoformat(timespec="seconds")
+            rows.append(row)
         except Exception as e:
-            logger.error(f"❌ Failed to process {symbol}: {e}")
+            logger.exception("Error computing TMV for %s: %s", sym, e)
 
-    if records:
-        df_scores = pd.DataFrame(records)
-        df_scores = df_scores[["Symbol", "TMV Score", "Trend Score", "Momentum Score", "Volume Score", "Trend Direction", "Reversal Probability"]]
-        df_scores.sort_values("TMV Score", ascending=False, inplace=True)
-        log_to_google_sheets("LiveScores", df_scores)
-        logger.info("✅ TMV scores logged to LiveScores sheet.")
-    else:
-        logger.warning("⚠️ No scores to log.")
+    return pd.DataFrame(rows)
 
-def job():
-    if is_market_open():
-        print("✅ Market is open. Running TMV updater...")
-        run_updater()
-    else:
-        print("🛌 Market is closed. Skipping run.")
 
-if len(sys.argv) > 1 and sys.argv[1] == "test":
-    print("🔬 Running in test mode using yesterday's data...")
-    run_updater(days_back=3)
-    sys.exit()
+def main():
+    logger.info("Starting TMV updater...")
+    symbols = load_watchlist_symbols()
+    if not symbols:
+        logger.warning("No symbols in TMV watchlist.")
+        return
 
-schedule.every(15).minutes.do(job)
-print("📆 TMV updater scheduler started (IST)...")
+    df = compute_tmv_table(symbols)
+    if df.empty:
+        logger.warning("TMV updater produced empty table.")
+        return
 
-while True:
-    schedule.run_pending()
-    time.sleep(60)
+    log_to_google_sheets(
+        workbook=OUTPUT_WORKBOOK,
+        sheet_name=OUTPUT_SHEET,
+        df=df,
+        clear=True,
+    )
+    logger.info("TMV updater completed with %d rows.", len(df))
+
+
+if __name__ == "__main__":
+    main()
