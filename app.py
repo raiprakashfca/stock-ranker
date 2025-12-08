@@ -1,219 +1,238 @@
-# app.py
-
-import logging
-from datetime import datetime
-
+import os, json, logging
 import numpy as np
 import pandas as pd
 import pytz
+from datetime import datetime
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
+import streamlit.components.v1 as components
 from kiteconnect import KiteConnect
 
 from utils.token_panel import render_token_panel
-from utils.token_utils import load_credentials_from_gsheet, get_gsheet_client
-from utils.fetch_ohlc import fetch_ohlc_data, calculate_indicators
+from utils.token_utils import load_credentials_from_gsheet
+from fetch_ohlc import fetch_ohlc_data, calculate_indicators
 
 # -----------------------------
-# Basic config
+# Make Streamlit secrets visible to modules that read env vars
+# (token_panel expects env keys)
 # -----------------------------
-st.set_page_config(page_title="TMV Stock Ranker", page_icon="📊", layout="wide")
+if "ZERODHA_TOKEN_SHEET_KEY" in st.secrets:
+    os.environ["ZERODHA_TOKEN_SHEET_KEY"] = st.secrets["ZERODHA_TOKEN_SHEET_KEY"]
+if "ZERODHA_TOKEN_WORKSHEET" in st.secrets:
+    os.environ["ZERODHA_TOKEN_WORKSHEET"] = st.secrets["ZERODHA_TOKEN_WORKSHEET"]
+if "GOOGLE_SERVICE_ACCOUNT_JSON" in st.secrets:
+    os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"] = st.secrets["GOOGLE_SERVICE_ACCOUNT_JSON"]
+
+# -----------------------------
+# Logging
+# -----------------------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-logger = logging.getLogger("tmv_app")
-
-IST = pytz.timezone("Asia/Kolkata")
-WORKBOOK_NAME = "BackgroundAnalysisStore"
-LIVESCORES_SHEET = "LiveScores"
-MAX_STALENESS_MIN = 20  # Hard stop if TMV older than this many minutes
-
-# Auto-refresh every 60s
-st_autorefresh(interval=60_000, key="tmv_auto_refresh")
-
+logger = logging.getLogger("tmv_dashboard")
 
 # -----------------------------
-# Google Sheets: LiveScores
+# Streamlit config
 # -----------------------------
-@st.cache_data(ttl=10)
-def fetch_livescores_df() -> pd.DataFrame:
-    """Read TMV table from BackgroundAnalysisStore / LiveScores."""
-    client = get_gsheet_client()
-    ws = client.open(WORKBOOK_NAME).worksheet(LIVESCORES_SHEET)
-    values = ws.get_all_values()
-
-    if not values:
-        return pd.DataFrame()
-
-    header, *rows = values
-    df = pd.DataFrame(rows, columns=header)
-    return df
-
-
-def parse_asof(df: pd.DataFrame):
-    """Parse AsOf column and return latest IST timestamp, or None if missing/invalid."""
-    if "AsOf" not in df.columns:
-        return None
-
-    s = pd.to_datetime(df["AsOf"], errors="coerce")
-    s = s.dropna()
-    if s.empty:
-        return None
-
-    ts = s.max()
-    if ts.tzinfo is None:
-        ts = IST.localize(ts)
-
-    return ts.astimezone(IST)
-
-
-def freshness_badge(as_of: datetime):
-    now = datetime.now(IST)
-    age_min = (now - as_of).total_seconds() / 60.0
-
-    if age_min <= 5:
-        return f"🟢 LIVE ({age_min:.1f} min ago)", "green"
-    elif age_min <= MAX_STALENESS_MIN:
-        return f"🟡 LATE ({age_min:.1f} min ago)", "orange"
-    else:
-        return f"🔴 STALE ({age_min:.1f} min ago)", "red"
-
+st.set_page_config(page_title="TMV Stock Ranker", page_icon="📈", layout="wide")
 
 # -----------------------------
-# Zerodha LTP helper
+# Sidebar: Zerodha token status
 # -----------------------------
-def add_live_ltp(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Add LTP and % Change columns using Zerodha Kite LTP API.
-    Uses your sheet-based credentials (ZerodhaTokenStore).
-    """
-    df = df.copy()
-    if "Symbol" not in df.columns or df.empty:
-        return df
+st.sidebar.header("🔐 Zerodha Session")
 
+try:
+    api_key, api_secret, access_token = load_credentials_from_gsheet()
+    if not api_key or not access_token:
+        raise RuntimeError("Missing API key or access token in ZerodhaTokenStore.")
+
+    kite = KiteConnect(api_key=api_key)
+    kite.set_access_token(access_token)
+    profile = kite.profile()
+
+    st.sidebar.success(f"✅ Logged in as: {profile['user_name']} ({profile['user_id']})")
+
+    # Optional: show token expiry from D1 if you maintain it
     try:
-        api_key, api_secret, access_token = load_credentials_from_gsheet()
-        if not api_key or not access_token:
-            st.warning("⚠️ Missing Zerodha API Key or Access Token in ZerodhaTokenStore.")
-            return df
+        import gspread
+        from google.oauth2.service_account import Credentials
+        sa_json = json.loads(st.secrets["GOOGLE_SERVICE_ACCOUNT_JSON"])
+        creds = Credentials.from_service_account_info(
+            sa_json,
+            scopes=["https://www.googleapis.com/auth/spreadsheets",
+                    "https://www.googleapis.com/auth/drive"]
+        )
+        gc = gspread.authorize(creds)
+        ws_token = gc.open("ZerodhaTokenStore").worksheet("Sheet1")
+        expiry_time = ws_token.acell("D1").value
+        if expiry_time:
+            st.sidebar.info(f"⏳ Token valid until: {expiry_time}")
+    except Exception:
+        pass
 
-        kite = KiteConnect(api_key=api_key)
-        kite.set_access_token(access_token)
+except Exception as e:
+    # Fallback to login+paste panel
+    st.sidebar.warning("⚠️ Stored token invalid or expired. Please log in again.")
+    access_token = render_token_panel()
+    if not access_token:
+        st.stop()
 
-        symbols = df["Symbol"].astype(str).tolist()
-        instruments = [f"NSE:{s.replace('_', '-')}" for s in symbols]
-
-        # Zerodha allows bulk ltp calls; chunk to be safe
-        all_ltp = {}
-        chunk_size = 150
-        for i in range(0, len(instruments), chunk_size):
-            chunk = instruments[i:i + chunk_size]
-            data = kite.ltp(chunk)
-            all_ltp.update(data)
-
-        ltps = []
-        pct_changes = []
-        for sym in symbols:
-            key = f"NSE:{sym.replace('_', '-')}"
-            info = all_ltp.get(key, {})
-            last_price = info.get("last_price")
-            ohlc = info.get("ohlc") or {}
-            prev_close = ohlc.get("close") or np.nan
-
-            if last_price is None:
-                ltps.append(np.nan)
-                pct_changes.append(np.nan)
-            else:
-                ltps.append(last_price)
-                if prev_close and not np.isnan(prev_close):
-                    pct_changes.append((last_price - prev_close) / prev_close * 100.0)
-                else:
-                    pct_changes.append(np.nan)
-
-        df["LTP"] = ltps
-        df["% Change"] = pct_changes
-
-    except Exception as e:
-        st.warning(f"⚠️ Could not fetch live LTPs from Zerodha: {e}")
-
-    return df
-
+    kite = KiteConnect(api_key=st.secrets.get("Zerodha_API_Key", ""))
+    kite.set_access_token(access_token)
+    try:
+        profile = kite.profile()
+        st.sidebar.success(f"🔐 Token refreshed for {profile['user_name']} ({profile['user_id']})")
+    except Exception as e2:
+        st.sidebar.error(f"Token refresh failed: {e2}")
+        st.stop()
 
 # -----------------------------
-# Sidebar: Token panel
+# Sidebar: auto-refresh
 # -----------------------------
-with st.sidebar:
-    st.header("🔐 Zerodha Token")
-    render_token_panel()
-
+st.sidebar.markdown("---")
+st.sidebar.info("🔄 Auto-refresh every 1 min. 🕒 Last Updated shown below.")
+st_autorefresh(interval=60_000, key="refresh")
+components.html(
+    """
+    <div style='font-size:14px;color:gray;'>
+      Next refresh in <span id='cd'></span> seconds.
+    </div>
+    <script>
+      let s=60; const e=document.getElementById('cd');
+      (function u(){ e.innerText=s; if(s-->0) setTimeout(u,1000); })();
+    </script>
+    """,
+    height=40,
+)
 
 # -----------------------------
-# Main app
+# Title & timestamp
 # -----------------------------
-st.title("📊 TMV Stock Ranker Dashboard")
-st.caption("TMV scores from Google Sheets + live prices from Zerodha. Option A: Sheet is the source of truth.")
+st.title("📈 Multi-Timeframe TMV Stock Ranking Dashboard")
+now_str = datetime.now(pytz.timezone("Asia/Kolkata")).strftime("%d %b %Y, %I:%M %p IST")
+st.markdown(f"#### 🕒 Page refreshed at: {now_str}")
 
-df = fetch_livescores_df()
-if df.empty or "Symbol" not in df.columns:
-    st.error("❌ LiveScores sheet is empty or missing 'Symbol' column.")
+# -----------------------------
+# Load TMV Scores CSV
+# -----------------------------
+csv_url = os.getenv(
+    "LIVE_SCORES_CSV_URL",
+    "https://docs.google.com/spreadsheets/d/1Cpgj1M_ofN1SqvuqDDHuN7Gy17tfkhy4fCCP8Mx7bRI/export?format=csv&gid=0"
+)
+try:
+    df = pd.read_csv(csv_url)
+    if df.empty or "Symbol" not in df.columns:
+        st.error("❌ LiveScores sheet is empty or invalid.")
+        st.stop()
+except Exception as e:
+    st.error(f"❌ Error reading Google Sheet: {e}")
     st.stop()
 
-# Enforce freshness
-as_of = parse_asof(df)
-if as_of is None:
-    st.error("🛑 LiveScores has no valid AsOf timestamps. Refusing to show data (freshness unknown).")
-    st.stop()
+# -----------------------------
+# Freshness utilities
+# -----------------------------
+IST = pytz.timezone("Asia/Kolkata")
 
-now_ist = datetime.now(IST)
-age_min = (now_ist - as_of).total_seconds() / 60.0
-if age_min > MAX_STALENESS_MIN:
-    st.error(
-        f"🛑 LiveScores is {age_min:.1f} minutes old (limit: {MAX_STALENESS_MIN} min). "
-        "Data is stale — refusing to load."
+def looks_stale(df_in: pd.DataFrame) -> bool:
+    """
+    Heuristics:
+      0) If an AsOf column exists, treat data as stale if older than MAX_AGE_MIN minutes.
+      1) Else, if a timestamp column exists (LastUpdated/UpdatedAt/RunDate), ensure it's today IST.
+      2) Else, defer to LTP-based check after LTP fill.
+    """
+    MAX_AGE_MIN = 20
+
+    # 0) Prefer precise AsOf timestamps if present
+    if "AsOf" in df_in.columns:
+        try:
+            ts = pd.to_datetime(df_in["AsOf"], errors="coerce").max()
+            if pd.notna(ts):
+                if ts.tzinfo is None:
+                    ts = IST.localize(ts)
+                ts = ts.astimezone(IST)
+                age_min = (datetime.now(IST) - ts).total_seconds() / 60.0
+                return age_min > MAX_AGE_MIN
+        except Exception:
+            pass
+
+    # 1) Fall back to date-only columns if present
+    for col in ["LastUpdated", "UpdatedAt", "RunDate"]:
+        if col in df_in.columns:
+            try:
+                ts = pd.to_datetime(df_in[col].iloc[0], errors="coerce")
+                if pd.isna(ts):
+                    continue
+                if ts.tzinfo is None:
+                    ts = IST.localize(ts)
+                ts = ts.astimezone(IST)
+                return ts.date() != datetime.now(IST).date()
+            except Exception:
+                pass
+
+    # 2) If we get here, we'll re-check after LTP fill (below).
+    return False  # provisional
+
+# -----------------------------
+# Fetch LTPs (batch)
+# -----------------------------
+def fetch_ltp_batch(symbols):
+    if not symbols:
+        return {}
+    keys = [f"NSE:{s.replace('_','-')}" for s in symbols]
+    out = {}
+    CHUNK = 150
+    for i in range(0, len(keys), CHUNK):
+        chunk = keys[i:i+CHUNK]
+        try:
+            resp = kite.ltp(chunk)
+            for k, v in resp.items():
+                sym = k.split(":", 1)[1].replace('-', '_')
+                out[sym] = v.get("last_price", np.nan)
+        except Exception as e:
+            logger.warning(f"LTP batch failed for {chunk[:3]}...: {e}")
+    return out
+
+symbols = df["Symbol"].dropna().astype(str).tolist()
+ltp_map = fetch_ltp_batch(symbols)
+df["LTP"] = df["Symbol"].map(lambda s: ltp_map.get(s, np.nan))
+
+# After LTPs arrive, finalize freshness decision
+fresh_ok = not looks_stale(df)
+if "LTP" in df.columns:
+    if df["LTP"].isna().all() or (df["LTP"] == 0).all():
+        fresh_ok = False
+
+badge = "🟢 LIVE" if fresh_ok else "🔴 STALE"
+st.markdown(f"### Data Status: {badge}")
+
+# Optional: show a sheet-level "last updated" if your writer sets H1
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials
+    sa_json = json.loads(st.secrets["GOOGLE_SERVICE_ACCOUNT_JSON"])
+    creds = Credentials.from_service_account_info(
+        sa_json,
+        scopes=["https://www.googleapis.com/auth/spreadsheets","https://www.googleapis.com/auth/drive"]
     )
-    st.stop()
+    gc = gspread.authorize(creds)
+    # Convert CSV export URL to edit URL to read cells (works for published sheets)
+    edit_url = csv_url.replace("/export?format=csv", "/edit")
+    ws_ls = gc.open_by_url(edit_url).sheet1
+    try:
+        last_updated_cell = ws_ls.acell("H1").value  # <-- have your writer populate this
+        if last_updated_cell:
+            st.sidebar.caption(f"📌 Sheet last updated (H1): {last_updated_cell}")
+    except Exception:
+        pass
+except Exception as e:
+    st.sidebar.caption(f"ℹ️ Freshness meta not available: {e}")
 
-badge_text, badge_color = freshness_badge(as_of)
+# -----------------------------
+# Display table
+# -----------------------------
+st.dataframe(df, use_container_width=True)
 
-col_badge, col_time = st.columns([2, 1])
-with col_badge:
-    st.markdown(
-        f"""
-        <div style="padding:0.4rem 0.8rem;border-radius:0.5rem;
-                    background-color:{badge_color};color:white;
-                    display:inline-block;font-weight:bold;">
-            {badge_text}
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-with col_time:
-    st.write(f"**As of:** {as_of.strftime('%Y-%m-%d %H:%M:%S')} IST")
-
-st.markdown("---")
-
-# Numeric conversion for TMV columns
-for col in ["TMV Score", "Trend Score", "Momentum Score", "Volume Score"]:
-    if col in df.columns:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-
-# Add live LTP and %Change
-df_live = add_live_ltp(df)
-
-# Sort by TMV Score if available
-if "TMV Score" in df_live.columns:
-    df_live = df_live.sort_values(by="TMV Score", ascending=False, na_position="last")
-
-# Pretty formatting
-df_disp = df_live.copy()
-for col in ["TMV Score", "Trend Score", "Momentum Score", "Volume Score", "% Change"]:
-    if col in df_disp.columns:
-        df_disp[col] = df_disp[col].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "")
-
-if "LTP" in df_disp.columns:
-    df_disp["LTP"] = df_disp["LTP"].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "")
-
-st.subheader("TMV Snapshot")
-st.dataframe(df_disp, use_container_width=True, hide_index=True)
-
+# -----------------------------
+# TMV Explainer (on-demand live OHLC)
+# -----------------------------
 st.markdown("---")
 st.subheader("📘 TMV Explainer")
 
@@ -223,16 +242,8 @@ if not df.empty:
         sym_for_fetch = sel.replace("_", "-")
         try:
             df15 = fetch_ohlc_data(sym_for_fetch, "15minute", 7)
-            if df15 is None or df15.empty:
-                st.warning("No OHLC data for this symbol.")
-            else:
-                ind = calculate_indicators(df15)
-                if not ind:
-                    st.info("Could not compute indicators for this symbol.")
-                else:
-                    expl_df = pd.DataFrame(
-                        {"Indicator": list(ind.keys()), "Value": list(ind.values())}
-                    )
-                    st.table(expl_df)
+            indicators = calculate_indicators(df15)
+            for name, val in indicators.items():
+                st.markdown(f"**{name}:** {round(val,3) if isinstance(val,(int,float)) else val}")
         except Exception as e:
             st.error(f"Failed to compute indicators for {sel}: {e}")
