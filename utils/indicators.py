@@ -1,52 +1,82 @@
+# utils/indicators.py
+
 import pandas as pd
-import numpy as np
 import pandas_ta as ta
 
-def calculate_scores(df):
-    scores = {}
 
-    df['date'] = pd.to_datetime(df['date'])
-    df.set_index('date', inplace=True)
+def calculate_scores(df: pd.DataFrame) -> dict:
+    """
+    Compute Trend, Momentum, Volume scores + TMV Score and Reversal Probability.
 
-    if not {'open', 'high', 'low', 'close', 'volume'}.issubset(df.columns):
+    Expects columns: date, open, high, low, close, volume
+    """
+    scores: dict = {}
+
+    required = {"date", "open", "high", "low", "close", "volume"}
+    if not required.issubset(df.columns):
         return {}
 
-    # Trend signals
-    ema8 = ta.ema(df['close'], length=8)
-    ema21 = ta.ema(df['close'], length=21)
-    supertrend = ta.supertrend(df['high'], df['low'], df['close'])["SUPERT_7_3.0"]
+    df = df.copy()
+    df["date"] = pd.to_datetime(df["date"])
+    df.set_index("date", inplace=True)
+    df.sort_index(inplace=True)
+
+    if len(df) < 50:
+        # Not enough candles for meaningful TMV
+        return {}
+
+    close = df["close"]
+    high = df["high"]
+    low = df["low"]
+    vol = df["volume"]
+
+    # --- Trend ---
+    ema8 = ta.ema(close, length=8)
+    ema21 = ta.ema(close, length=21)
+    st_df = ta.supertrend(high, low, close, length=7, multiplier=3.0)
+    supertrend = st_df["SUPERT_7_3.0"] if "SUPERT_7_3.0" in st_df.columns else st_df.iloc[:, 0]
 
     trend_score = 0
-    if ema8.iloc[-1] > ema21.iloc[-1]:
-        trend_score += 1
-    if df['close'].iloc[-1] > supertrend.iloc[-1]:
-        trend_score += 1
+    try:
+        if ema8.iloc[-1] > ema21.iloc[-1]:
+            trend_score += 1
+        if close.iloc[-1] > supertrend.iloc[-1]:
+            trend_score += 1
+    except Exception:
+        # if indicators are NaN, treat as neutral
+        pass
 
-    # Momentum signals
-    macd = ta.macd(df['close'])
-    rsi = ta.rsi(df['close'])
-    adx = ta.adx(df['high'], df['low'], df['close'])
+    # --- Momentum ---
+    macd = ta.macd(close)
+    rsi = ta.rsi(close)
+    adx = ta.adx(high, low, close)
 
     momentum_score = 0
-    if macd['MACD_12_26_9'].iloc[-1] > macd['MACDs_12_26_9'].iloc[-1]:
-        momentum_score += 1
-    if rsi.iloc[-1] > 50:
-        momentum_score += 1
-    if adx['ADX_14'].iloc[-1] > 20:
-        momentum_score += 1
+    try:
+        if macd["MACD_12_26_9"].iloc[-1] > macd["MACDs_12_26_9"].iloc[-1]:
+            momentum_score += 1
+        if rsi.iloc[-1] > 50:
+            momentum_score += 1
+        if adx["ADX_14"].iloc[-1] > 20:
+            momentum_score += 1
+    except Exception:
+        pass
 
-    # Volume signals
-    obv = ta.obv(df['close'], df['volume'])
-    mfi = ta.mfi(df['high'], df['low'], df['close'], df['volume'])
+    # --- Volume ---
+    obv = ta.obv(close, vol)
+    mfi = ta.mfi(high, low, close, vol)
 
     volume_score = 0
-    if obv.diff().iloc[-1] > 0:
-        volume_score += 1
-    if mfi.iloc[-1] > 50:
-        volume_score += 1
+    try:
+        if obv.diff().iloc[-1] > 0:
+            volume_score += 1
+        if mfi.iloc[-1] > 50:
+            volume_score += 1
+    except Exception:
+        pass
 
-    # Final TMV Score (rule-based)
-    tmv_score = 0
+    # --- Rule-based TMV ---
+    tmv_score = 0.0
     if trend_score == 2:
         tmv_score += 0.4
     elif trend_score == 1:
@@ -62,22 +92,28 @@ def calculate_scores(df):
     elif volume_score == 1:
         tmv_score += 0.15
 
-    scores['Trend Score'] = trend_score / 2
-    scores['Momentum Score'] = momentum_score / 3
-    scores['Volume Score'] = volume_score / 2
-    scores['TMV Score'] = round(tmv_score, 2)
+    scores["Trend Score"] = trend_score / 2 if trend_score else 0
+    scores["Momentum Score"] = momentum_score / 3 if momentum_score else 0
+    scores["Volume Score"] = volume_score / 2 if volume_score else 0
+    scores["TMV Score"] = round(tmv_score, 2)
 
-    # Trend Direction
+    # Trend direction
     if trend_score == 2:
-        scores['Trend Direction'] = 'Bullish'
+        scores["Trend Direction"] = "Bullish"
     elif trend_score == 0:
-        scores['Trend Direction'] = 'Bearish'
+        scores["Trend Direction"] = "Bearish"
     else:
-        scores['Trend Direction'] = 'Neutral'
+        scores["Trend Direction"] = "Neutral"
 
-    # Reversal Probability (RSI extremes)
-    recent_rsi = rsi.tail(5)
-    reversal = ((recent_rsi < 30) | (recent_rsi > 70)).sum() / 5
-    scores['Reversal Probability'] = round(reversal, 2)
+    # Reversal probability based on RSI extremes in last 5 candles
+    try:
+        recent_rsi = rsi.dropna().tail(5)
+        if len(recent_rsi) == 0:
+            scores["Reversal Probability"] = 0.0
+        else:
+            reversal = ((recent_rsi < 30) | (recent_rsi > 70)).sum() / len(recent_rsi)
+            scores["Reversal Probability"] = round(float(reversal), 2)
+    except Exception:
+        scores["Reversal Probability"] = 0.0
 
     return scores
