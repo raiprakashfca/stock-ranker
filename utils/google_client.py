@@ -24,11 +24,13 @@ def _load_service_account_info() -> Dict[str, Any]:
     Unified loader for service-account JSON.
 
     Priority:
-    1) GOOGLE_SERVICE_ACCOUNT_JSON env
-    2) GSPREAD_CREDENTIALS_JSON env
-    3) st.secrets["GOOGLE_SERVICE_ACCOUNT_JSON"]
-    4) st.secrets["gspread_service_account"]
+    1) GOOGLE_SERVICE_ACCOUNT_JSON env  (JSON string)
+    2) GSPREAD_CREDENTIALS_JSON env     (JSON string)
+    3) st.secrets["GOOGLE_SERVICE_ACCOUNT_JSON"]  (JSON string)
+    4) st.secrets["gcp_service_account"]          (TOML table in secrets.toml)
+    5) st.secrets["gspread_service_account"]      (TOML table, older pattern)
     """
+    # ---- 1 & 2: environment variables ----
     raw = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
     if raw:
         return json.loads(raw)
@@ -37,16 +39,25 @@ def _load_service_account_info() -> Dict[str, Any]:
     if raw:
         return json.loads(raw)
 
+    # ---- 3–5: Streamlit secrets (if running inside Streamlit) ----
     if st is not None:
+        # JSON string stored directly
         if "GOOGLE_SERVICE_ACCOUNT_JSON" in st.secrets:
             return json.loads(st.secrets["GOOGLE_SERVICE_ACCOUNT_JSON"])
+
+        # Your current pattern: [gcp_service_account] table in secrets.toml
+        if "gcp_service_account" in st.secrets:
+            # st.secrets["gcp_service_account"] is already a dict-like object
+            return dict(st.secrets["gcp_service_account"])
+
+        # Older pattern some apps use
         if "gspread_service_account" in st.secrets:
-            # already a dict-like secret
             return dict(st.secrets["gspread_service_account"])
 
     raise RuntimeError(
         "Service-account JSON not found. "
-        "Set GOOGLE_SERVICE_ACCOUNT_JSON env or Streamlit secrets."
+        "Set GOOGLE_SERVICE_ACCOUNT_JSON env or add [gcp_service_account] "
+        "or GOOGLE_SERVICE_ACCOUNT_JSON to Streamlit secrets."
     )
 
 
