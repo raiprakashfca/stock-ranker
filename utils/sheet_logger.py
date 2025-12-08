@@ -1,31 +1,54 @@
-import streamlit as st
+# utils/sheet_logger.py
+
+import logging
+from typing import Optional
+
 import pandas as pd
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 
-def log_to_google_sheets(sheet_name, df):
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    try:
-        # ✅ Defensive check to avoid 'str' issues
-        if not isinstance(df, pd.DataFrame):
+try:
+    import streamlit as st  # type: ignore
+except ImportError:
+    st = None
+
+from .google_client import get_gspread_client
+
+
+def log_to_google_sheets(
+    workbook: str,
+    sheet_name: str,
+    df: pd.DataFrame,
+    clear: bool = True,
+    max_rows: Optional[int] = None,
+) -> None:
+    """
+    Write a DataFrame to a Google Sheet.
+
+    - workbook: Google Sheet name (e.g., "Stock Rankings")
+    - sheet_name: Worksheet name (tab)
+    - clear: whether to clear the sheet before writing
+    - max_rows: optional cap on number of rows (for huge logs)
+    """
+    if not isinstance(df, pd.DataFrame):
+        if st:
             st.warning("🛑 Sheet log failed: Provided data is not a DataFrame")
-            return
+        logging.warning("log_to_google_sheets called with non-DataFrame.")
+        return
 
-        # Round all numerical data to 2 decimal places
+    try:
         df = df.round(2)
+        if max_rows is not None:
+            df = df.head(max_rows)
 
-        creds_dict = st.secrets["gspread_service_account"]
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-        client = gspread.authorize(creds)
-        sheet = client.open("Stock Rankings").worksheet(sheet_name)
+        client = get_gspread_client()
+        sheet = client.open(workbook).worksheet(sheet_name)
 
-        # Clear the sheet
-        sheet.clear()
+        if clear:
+            sheet.clear()
 
-        # Prepare data
         data = [df.columns.tolist()] + df.values.tolist()
-
-        # Update all at once
         sheet.update("A1", data)
     except Exception as e:
-        st.warning(f"⚠️ Could not update Google Sheet: {e}")
+        msg = f"⚠️ Could not update Google Sheet: {e}"
+        logging.warning(msg)
+        if st:
+            st.warning(msg)
