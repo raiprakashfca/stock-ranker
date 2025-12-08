@@ -1,117 +1,181 @@
+# kite_ticker.py (cron-friendly version)
+#
+# Purpose:
+#   - Read the watchlist from LiveLTPStore (column A, rows 2+).
+#   - Fetch live LTP + % change using Zerodha HTTP APIs (no WebSocket).
+#   - Write back to LiveLTPStore as:
+#       A: Symbol, B: LTP, C: % Change
+#
+# Usage:
+#   - Configure env:
+#       GOOGLE_SERVICE_ACCOUNT_JSON  = JSON string of service account
+#       (or GSPREAD_CREDENTIALS_JSON as a fallback)
+#   - Ensure ZerodhaTokenStore (Sheet1) row 1 = [API Key, API Secret, Access Token, ...]
+#   - Schedule with cron / GitHub Actions every 1–5 minutes.
+
 import os
 import json
-import time
 import logging
-import pandas as pd
-import numpy as np
+from typing import Dict, List
+
 import gspread
-from kiteconnect import KiteConnect, KiteTicker
-from oauth2client.service_account import ServiceAccountCredentials
-import streamlit as st
+from google.oauth2.service_account import Credentials
+from kiteconnect import KiteConnect
 from datetime import datetime
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger("kite_ticker")
 
-# Load credentials from Streamlit secrets
-creds_dict = st.secrets["gspread_service_account"]
+SCOPE = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+]
 
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-client = gspread.authorize(creds)
 
-# Get API Key and Access Token
-token_sheet = client.open("ZerodhaTokenStore").sheet1
-api_key, api_secret, access_token = token_sheet.get_all_values()[0][:3]
+def _load_service_account_creds() -> Credentials:
+    """
+    Load Google service-account credentials from env.
+    Tries GOOGLE_SERVICE_ACCOUNT_JSON, then GSPREAD_CREDENTIALS_JSON.
+    """
+    raw = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON") or os.environ.get(
+        "GSPREAD_CREDENTIALS_JSON"
+    )
+    if not raw:
+        raise RuntimeError(
+            "Missing GOOGLE_SERVICE_ACCOUNT_JSON / GSPREAD_CREDENTIALS_JSON in environment."
+        )
 
-kite = KiteConnect(api_key=api_key)
-kite.set_access_token(access_token)
-
-# Prepare the LTP sheet
-sheet = client.open("LiveLTPStore").sheet1
-sheet.update("A1:C1", [["Symbol", "LTP", "% Change"]])
-
-symbols = [row[0] for row in sheet.get_all_values()[1:] if row]
-instrument_dump = kite.instruments("NSE")
-symbol_token_map = {}
-close_prices = {}
-
-for symbol in symbols:
     try:
-        token = next(i["instrument_token"] for i in instrument_dump if i["tradingsymbol"] == symbol and i["segment"] == "NSE")
-        ltp_data = kite.ltp(f"NSE:{symbol}")
-        close = ltp_data[f"NSE:{symbol}"]["ohlc"]["close"]
-        symbol_token_map[symbol] = token
-        close_prices[symbol] = close
-    except Exception as e:
-        logger.warning(f"⚠️ Skipping {symbol}: {e}")
+        sa_json = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"Invalid service-account JSON in env: {e}") from e
 
-tokens = list(symbol_token_map.values())
-kws = KiteTicker(api_key, access_token)
-
-ltp_data = {}
-
-def on_ticks(ws, ticks):
-    global ltp_data
-    for tick in ticks:
-        for symbol, token in symbol_token_map.items():
-            if tick["instrument_token"] == token:
-                ltp = tick["last_price"]
-                close = close_prices.get(symbol, ltp)
-                pct = ((ltp - close) / close) * 100 if close != 0 else 0
-                ltp_data[symbol] = (ltp, pct)
-
-    if len(ltp_data) == len(symbol_token_map):
-        rows = [[sym, f"{ltp_data[sym][0]:.2f}", f"{ltp_data[sym][1]:.2f}%"] for sym in symbol_token_map.keys()]
-        try:
-            sheet.update("A2", rows)
-            logger.info("✅ Updated LiveLTPStore")
-        except Exception as e:
-            logger.error(f"❌ Failed to update sheet: {e}")
+    return Credentials.from_service_account_info(sa_json, scopes=SCOPE)
 
 
-def on_connect(ws, response):
-    ws.subscribe(tokens)
+def _gspread_client() -> gspread.Client:
+    creds = _load_service_account_creds()
+    return gspread.authorize(creds)
 
-def on_close(ws, code, reason):
-    logger.warning(f"⚠️ Connection closed: {reason}")
 
-def on_error(ws, code, reason):
-    logger.error(f"❌ WebSocket error: {reason}")
+def _load_zerodha_credentials(gc: gspread.Client):
+    """
+    Read Zerodha API key/secret/access_token from ZerodhaTokenStore Sheet1, row 1.
+    Assumes layout: A1=API Key, B1=API Secret, C1=Access Token, D1=Expiry (optional).
+    """
+    ws = gc.open("ZerodhaTokenStore").worksheet("Sheet1")
+    row = ws.row_values(1)
+    if len(row) < 3:
+        raise RuntimeError(
+            "ZerodhaTokenStore Sheet1 row 1 does not contain [API Key, API Secret, Access Token]."
+        )
+    api_key, api_secret, access_token = row[:3]
+    return api_key.strip(), api_secret.strip(), access_token.strip()
 
-kws.on_ticks = on_ticks
-kws.on_connect = on_connect
-kws.on_close = on_close
-kws.on_error = on_error
 
-logger.info("🚀 Starting Kite Ticker WebSocket...")
-try:
-    kws.connect(threaded=True)
-except Exception as e:
-    logger.error(f"❌ WebSocket connection failed: {e}")
+def _load_symbols(gc: gspread.Client) -> List[str]:
+    """
+    Load watchlist symbols from LiveLTPStore Sheet1, column A, rows 2+.
+    """
+    ws = gc.open("LiveLTPStore").sheet1
+    values = ws.get_all_values()
+    symbols = []
+    # Skip header row (index 0)
+    for row in values[1:]:
+        if not row:
+            continue
+        sym = (row[0] or "").strip().upper()
+        if sym:
+            symbols.append(sym)
+    return symbols
 
-# Fallback logic using last trading day's data
-if not ltp_data:
-    logger.info("📉 Using fallback: last trading day's LTP")
-    fallback_rows = []
-    for symbol in symbols:
-        try:
-            hist = kite.historical_data(
-                instrument_token=symbol_token_map[symbol],
-                from_date=datetime.now() - pd.Timedelta(days=2),
-                to_date=datetime.now() - pd.Timedelta(days=1),
-                interval="day"
-            )
-            if hist:
-                last_close = hist[-1]["close"]
-                fallback_rows.append([symbol, f"{last_close:.2f}", "0.00%"])
-        except Exception as e:
-            logger.warning(f"⚠️ Failed fallback for {symbol}: {e}")
+
+def _fetch_ltp_batch(kite: KiteConnect, symbols: List[str]) -> Dict[str, dict]:
+    if not symbols:
+        return {}
+
+    # Build NSE:SYMBOL keys
+    keys = [f"NSE:{s}" for s in symbols]
     try:
-        sheet.update("A2", fallback_rows)
-        logger.info("✅ Fallback LTP data updated to sheet")
+        data = kite.ltp(keys)
+        return data or {}
     except Exception as e:
-        logger.error(f"❌ Fallback sheet update failed: {e}")
+        logger.error(f"Failed to fetch LTP from Zerodha: {e}")
+        return {}
 
-while True:
-    time.sleep(60)
+
+def _update_live_ltp_store(gc: gspread.Client, ltp_resp: Dict[str, dict]):
+    """
+    Write header + rows back to LiveLTPStore.
+    Columns:
+      A: Symbol
+      B: LTP
+      C: % Change
+    """
+    ws = gc.open("LiveLTPStore").sheet1
+
+    rows = []
+    for key, info in ltp_resp.items():
+        # key is like "NSE:RELIANCE"
+        try:
+            _, symbol = key.split(":", 1)
+        except ValueError:
+            continue
+
+        last_price = info.get("last_price")
+        ohlc = info.get("ohlc") or {}
+        close = ohlc.get("close") or 0.0
+
+        if last_price is None:
+            continue
+
+        if close:
+            pct = (last_price - close) / close * 100.0
+        else:
+            pct = 0.0
+
+        rows.append(
+            [
+                symbol,
+                f"{last_price:.2f}",
+                f"{pct:.2f}%",
+            ]
+        )
+
+    # Sort by % change descending, if you like
+    # rows.sort(key=lambda r: float(r[2].rstrip('%')), reverse=True)
+
+    # Write header + rows in a single update
+    payload = [["Symbol", "LTP", "% Change"]] + rows
+    ws.update("A1", payload)
+    logger.info("✅ LiveLTPStore updated with %d symbols", len(rows))
+
+
+def main():
+    logger.info("🚀 Starting one-shot LiveLTPStore updater...")
+    try:
+        gc = _gspread_client()
+        api_key, api_secret, access_token = _load_zerodha_credentials(gc)
+        kite = KiteConnect(api_key=api_key)
+        kite.set_access_token(access_token)
+
+        symbols = _load_symbols(gc)
+        if not symbols:
+            logger.warning("No symbols found in LiveLTPStore. Nothing to do.")
+            return
+
+        logger.info("Found %d symbols in LiveLTPStore.", len(symbols))
+        ltp_resp = _fetch_ltp_batch(kite, symbols)
+        if not ltp_resp:
+            logger.error("No LTP data returned from Zerodha. Aborting.")
+            return
+
+        _update_live_ltp_store(gc, ltp_resp)
+        logger.info("✅ Done.")
+    except Exception as e:
+        logger.exception("❌ Fatal error in kite_ticker updater: %s", e)
+        raise
+
+
+if __name__ == "__main__":
+    main()
