@@ -1,20 +1,19 @@
 # tmv_updater.py
 """
-One-shot TMV updater.
+TMV Updater (Authoritative Google Sheet Writer)
 
-- Reads list of symbols from BackgroundAnalysisStore → Watchlist.
-- Fetches OHLC data.
-- Computes TMV scores.
-- Adds IST timestamp to each row as `AsOf`.
-- Logs results back to BackgroundAnalysisStore → LiveScores.
-
-Scheduled via cron / GitHub Actions.
+This script:
+- Loads watchlist symbols from BackgroundAnalysisStore / Watchlist
+- Fetches OHLC data for each symbol
+- Computes TMV scores (Trend, Momentum, Volume)
+- Writes the output to BackgroundAnalysisStore / LiveScores with:
+    - AsOf IST timestamp per row
+    - LastRun cell (H1) for watchdog
 """
 
 import logging
 from datetime import datetime
 from typing import List
-
 import pandas as pd
 import pytz
 
@@ -23,57 +22,57 @@ from utils.ohlc import fetch_ohlc
 from utils.indicators import calculate_scores
 from utils.sheet_logger import log_to_google_sheets
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s"
+)
 logger = logging.getLogger("tmv_updater")
 
 IST = pytz.timezone("Asia/Kolkata")
 
-WATCHLIST_WORKBOOK = "BackgroundAnalysisStore"
+WATCHLIST_BOOK = "BackgroundAnalysisStore"
 WATCHLIST_SHEET = "Watchlist"
-OUTPUT_WORKBOOK = "BackgroundAnalysisStore"
+OUTPUT_BOOK = "BackgroundAnalysisStore"
 OUTPUT_SHEET = "LiveScores"
 
 
-def load_watchlist_symbols() -> List[str]:
+def load_watchlist() -> List[str]:
     client = get_gspread_client()
-    ws = client.open(WATCHLIST_WORKBOOK).worksheet(WATCHLIST_SHEET)
+    ws = client.open(WATCHLIST_BOOK).worksheet(WATCHLIST_SHEET)
     values = ws.get_all_values()
 
-    symbols: List[str] = []
+    symbols = []
     for row in values[1:]:
-        if not row:
-            continue
-        sym = (row[0] or "").strip().upper()
-        if sym:
-            symbols.append(sym)
+        if row and row[0].strip():
+            symbols.append(row[0].strip().upper())
 
     return symbols
 
 
-def compute_tmv_table(symbols: List[str]) -> pd.DataFrame:
+def compute_table(symbols: List[str]) -> pd.DataFrame:
     rows = []
-    as_of = datetime.now(IST).replace(microsecond=0).isoformat()
+    timestamp = datetime.now(IST).replace(microsecond=0).isoformat()
 
     for sym in symbols:
         try:
-            df_ohlc = fetch_ohlc(sym, interval="15minute", days=7)
-            if df_ohlc.empty:
+            ohlc = fetch_ohlc(sym, interval="15minute", days=7)
+            if ohlc.empty:
                 logger.warning("No OHLC for %s", sym)
                 continue
 
-            scores = calculate_scores(df_ohlc)
+            scores = calculate_scores(ohlc)
             if not scores:
                 logger.warning("No TMV scores for %s", sym)
                 continue
 
             row = {"Symbol": sym}
             row.update(scores)
-            row["AsOf"] = as_of  # IST timestamp added to every row
+            row["AsOf"] = timestamp  # IST timestamp for each row
 
             rows.append(row)
 
-        except Exception as e:
-            logger.exception("Error computing TMV for %s: %s", sym, e)
+        except Exception as exc:
+            logger.exception("Error computing TMV for %s: %s", sym, exc)
 
     return pd.DataFrame(rows)
 
@@ -81,24 +80,33 @@ def compute_tmv_table(symbols: List[str]) -> pd.DataFrame:
 def main():
     logger.info("Starting TMV updater...")
 
-    symbols = load_watchlist_symbols()
+    symbols = load_watchlist()
     if not symbols:
-        logger.warning("TMV updater found no symbols in watchlist.")
+        logger.error("NO WATCHLIST SYMBOLS FOUND — Aborting.")
         return
 
-    df = compute_tmv_table(symbols)
+    df = compute_table(symbols)
     if df.empty:
-        logger.warning("TMV updater produced empty table.")
+        logger.error("TMV updater produced EMPTY DATAFRAME — Aborting.")
         return
 
+    # Write table to Sheet
     log_to_google_sheets(
-        workbook=OUTPUT_WORKBOOK,
+        workbook=OUTPUT_BOOK,
         sheet_name=OUTPUT_SHEET,
         df=df,
-        clear=True,
+        clear=True
     )
 
-    logger.info("TMV updater completed with %d rows.", len(df))
+    # Watchdog cell (H1)
+    try:
+        client = get_gspread_client()
+        ws = client.open(OUTPUT_BOOK).worksheet(OUTPUT_SHEET)
+        ws.update("H1", datetime.now(IST).isoformat())
+    except Exception as exc:
+        logger.warning("Could not update watchdog cell: %s", exc)
+
+    logger.info("TMV Updater Completed Successfully with %d rows.", len(df))
 
 
 if __name__ == "__main__":
