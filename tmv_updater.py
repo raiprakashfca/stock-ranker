@@ -34,34 +34,46 @@ logger = logging.getLogger("tmv_updater")
 # ─────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────
-def now_ist() -> datetime:
-    return datetime.now(IST).replace(microsecond=0)
-
-
 def now_ist_iso() -> str:
-    return now_ist().isoformat()
+    return datetime.now(IST).replace(microsecond=0).isoformat()
+
+
+def get_worksheet_safe(sh, title: str):
+    """Return worksheet by name, else fallback to first worksheet."""
+    try:
+        return sh.worksheet(title)
+    except Exception:
+        ws = sh.get_worksheet(0)
+        logger.warning(
+            "Worksheet '%s' not found. Falling back to first worksheet '%s'.",
+            title,
+            ws.title,
+        )
+        return ws
 
 
 # ─────────────────────────────────────────────────────────────
-# Load watchlist
+# Load symbols
 # ─────────────────────────────────────────────────────────────
 def load_watchlist(gc) -> List[str]:
-    ws = gc.open_by_key(BACKGROUND_SHEET_KEY).worksheet(WATCHLIST_WS)
-    raw = ws.col_values(1)
+    sh = gc.open_by_key(BACKGROUND_SHEET_KEY)
+    ws = get_worksheet_safe(sh, WATCHLIST_WS)
 
+    raw = ws.col_values(1)
     symbols = []
+
     for s in raw[1:]:  # skip header
         s = (s or "").strip().upper().replace("-", "_")
         if s:
             symbols.append(s)
 
-    symbols = list(dict.fromkeys(symbols))  # dedupe, keep order
-    logger.info("Loaded %d symbols from watchlist", len(symbols))
+    symbols = list(dict.fromkeys(symbols))
+    logger.info("Loaded %d symbols from worksheet '%s'", len(symbols), ws.title)
     return symbols
 
 
 # ─────────────────────────────────────────────────────────────
-# Compute TMV table
+# Compute TMV
 # ─────────────────────────────────────────────────────────────
 def compute_livescores(symbols: List[str]) -> pd.DataFrame:
     rows = []
@@ -70,30 +82,15 @@ def compute_livescores(symbols: List[str]) -> pd.DataFrame:
     for sym in symbols:
         try:
             ohlc = fetch_ohlc_data(sym, interval="15minute", days=10)
-
             if ohlc is None or ohlc.empty:
-                logger.warning("No OHLC for %s", sym)
                 continue
 
             df = ohlc.reset_index()
             if "date" not in df.columns:
                 df.rename(columns={df.columns[0]: "date"}, inplace=True)
 
-            # Drop last candle if it looks like a live/incomplete candle
-            last_ts = pd.to_datetime(df["date"].iloc[-1], errors="coerce")
-            if last_ts is not None:
-                age_sec = (now_ist() - last_ts.tz_localize(IST)).total_seconds()
-                if age_sec < 60 * 15:
-                    df = df.iloc[:-1]
-
-            if len(df) < 60:
-                logger.warning("Not enough candles for %s (%d)", sym, len(df))
-                continue
-
             scores = calculate_scores(df)
-
             if not scores or "TMV Score" not in scores:
-                logger.warning("TMV Score missing for %s", sym)
                 continue
 
             rows.append(
@@ -112,50 +109,27 @@ def compute_livescores(symbols: List[str]) -> pd.DataFrame:
         except Exception:
             logger.exception("Error processing %s", sym)
 
-    df_out = pd.DataFrame(rows)
-
-    if df_out.empty:
-        logger.error("No TMV rows generated.")
-        return df_out
-
-    df_out.columns = [str(c).strip() for c in df_out.columns]
-
-    if "TMV Score" not in df_out.columns:
-        raise RuntimeError("TMV Score column missing AFTER computation")
-
-    logger.info("Computed TMV for %d symbols | AsOf=%s", len(df_out), as_of)
-    return df_out
+    return pd.DataFrame(rows)
 
 
 # ─────────────────────────────────────────────────────────────
-# Write to Google Sheet (NO CLEAR)
+# Write to sheet
 # ─────────────────────────────────────────────────────────────
 def write_livescores(gc, df: pd.DataFrame):
-    ws = gc.open_by_key(BACKGROUND_SHEET_KEY).worksheet(LIVESCORE_WS)
+    sh = gc.open_by_key(BACKGROUND_SHEET_KEY)
 
-    preferred_order = [
-        "Symbol",
-        "TMV Score",
-        "Confidence",
-        "Trend Direction",
-        "Regime",
-        "Reversal Probability",
-        "CandleTime",
-        "AsOf",
-    ]
+    try:
+        ws = sh.worksheet(LIVESCORE_WS)
+    except Exception:
+        logger.warning("Worksheet '%s' not found. Creating it.", LIVESCORE_WS)
+        ws = sh.add_worksheet(title=LIVESCORE_WS, rows="500", cols="20")
 
-    cols = [c for c in preferred_order if c in df.columns]
-    cols += [c for c in df.columns if c not in cols]
-    df = df[cols].copy()
+    ws.update(
+        "A1",
+        [df.columns.tolist()] + df.astype(str).values.tolist(),
+    )
 
-    values = [df.columns.tolist()] + df.astype(str).values.tolist()
-
-    ws.update("A1", values)
-
-    # watchdog timestamp
-    ws.update("H1", [[now_ist_iso()]])
-
-    logger.info("LiveScores written: %d rows", len(df))
+    logger.info("LiveScores written to '%s' (%d rows)", ws.title, len(df))
 
 
 # ─────────────────────────────────────────────────────────────
@@ -166,12 +140,12 @@ def main():
 
     symbols = load_watchlist(gc)
     if not symbols:
-        logger.error("Watchlist empty. Aborting.")
+        logger.error("No symbols found. Aborting.")
         return
 
     df = compute_livescores(symbols)
     if df.empty:
-        logger.error("No data to write. Aborting.")
+        logger.error("No TMV data generated. Aborting.")
         return
 
     write_livescores(gc, df)
