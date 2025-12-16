@@ -1,31 +1,45 @@
-import streamlit as st
+import os, json
 import gspread
-import json
+import streamlit as st
 from google.oauth2.service_account import Credentials
 
-SCOPE = ["https://www.googleapis.com/auth/spreadsheets",
-         "https://www.googleapis.com/auth/drive"]
-SHEET_NAME = "ZerodhaTokenStore"
-WORKSHEET  = "Sheet1"
+SCOPE = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+]
 
-
-def get_gsheet_client():
-    # Parse the JSON string from secrets
-    sa_json = json.loads(st.secrets["GOOGLE_SERVICE_ACCOUNT_JSON"])
-    creds = Credentials.from_service_account_info(sa_json, scopes=SCOPE)
+def _client():
+    sa = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON") or st.secrets.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
+    if not sa:
+        raise RuntimeError("Missing GOOGLE_SERVICE_ACCOUNT_JSON in secrets/env.")
+    creds = Credentials.from_service_account_info(json.loads(sa), scopes=SCOPE)
     return gspread.authorize(creds)
 
-
 def load_credentials_from_gsheet():
-    client = get_gsheet_client()
-    sheet  = client.open(SHEET_NAME).worksheet(WORKSHEET)
-    api_key  = sheet.acell("A1").value
-    api_secret = sheet.acell("B1").value
-    access_token = sheet.acell("C1").value
+    """
+    Reads:
+      A1 = api_key
+      B1 = api_secret
+      C1 = access_token
+    from ZerodhaTokenStore sheet KEY (not by name).
+    """
+    sheet_key = os.getenv("ZERODHA_TOKEN_SHEET_KEY") or st.secrets.get("ZERODHA_TOKEN_SHEET_KEY", "")
+    ws_name = os.getenv("ZERODHA_TOKEN_WORKSHEET") or st.secrets.get("ZERODHA_TOKEN_WORKSHEET", "Sheet1")
+    if not sheet_key:
+        raise RuntimeError("Missing ZERODHA_TOKEN_SHEET_KEY in secrets/env.")
+
+    gc = _client()
+    ws = gc.open_by_key(sheet_key).worksheet(ws_name)
+    api_key = ws.acell("A1").value
+    api_secret = ws.acell("B1").value
+    access_token = ws.acell("C1").value
     return api_key, api_secret, access_token
 
-
 def save_token_to_gsheet(token: str):
-    client = get_gsheet_client()
-    sheet  = client.open(SHEET_NAME).worksheet(WORKSHEET)
-    sheet.update_acell("C1", token)
+    sheet_key = os.getenv("ZERODHA_TOKEN_SHEET_KEY") or st.secrets.get("ZERODHA_TOKEN_SHEET_KEY", "")
+    ws_name = os.getenv("ZERODHA_TOKEN_WORKSHEET") or st.secrets.get("ZERODHA_TOKEN_WORKSHEET", "Sheet1")
+    if not sheet_key:
+        raise RuntimeError("Missing ZERODHA_TOKEN_SHEET_KEY in secrets/env.")
+    gc = _client()
+    ws = gc.open_by_key(sheet_key).worksheet(ws_name)
+    ws.update_acell("C1", token)
