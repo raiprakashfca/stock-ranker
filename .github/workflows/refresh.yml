@@ -36,12 +36,13 @@ jobs:
 
       # ─────────────────────────────────────────────
       # Decode Google Service Account (BASE64 → JSON)
+      # IMPORTANT: overwrite SAME env var name
       # ─────────────────────────────────────────────
       - name: Decode Google service account JSON
         env:
-          GOOGLE_SERVICE_ACCOUNT_JSON_B64: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON_B64 }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
         run: |
-          echo "$GOOGLE_SERVICE_ACCOUNT_JSON_B64" | base64 -d > /tmp/gcp_sa.json
+          echo "$GOOGLE_SERVICE_ACCOUNT_JSON" | base64 -d > /tmp/gcp_sa.json
           echo "GOOGLE_SERVICE_ACCOUNT_JSON=$(cat /tmp/gcp_sa.json | python - << 'EOF'
 import json,sys
 print(json.dumps(json.load(sys.stdin)))
@@ -49,18 +50,18 @@ EOF
 )" >> $GITHUB_ENV
 
       # ─────────────────────────────────────────────
-      # (Optional) One-time debug — remove later
+      # One-time debug (remove later)
       # ─────────────────────────────────────────────
       - name: Debug decoded JSON length
         run: |
           echo "Decoded JSON length: ${#GOOGLE_SERVICE_ACCOUNT_JSON}"
 
       # ─────────────────────────────────────────────
-      # Run TMV Updater
+      # Run TMV updater
       # ─────────────────────────────────────────────
       - name: Run TMV updater (writes LiveScores)
         env:
-          # 🔑 USE DECODED ENV VARIABLE (CRITICAL)
+          # SAME NAME, now decoded
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ env.GOOGLE_SERVICE_ACCOUNT_JSON }}
 
           BACKGROUND_SHEET_KEY: ${{ secrets.BACKGROUND_SHEET_KEY }}
@@ -68,7 +69,6 @@ EOF
           WATCHLIST_WORKSHEET: "Watchlist"
           LIVESCORE_WORKSHEET: "LiveScores"
 
-          # Only if fetch_ohlc / token logic needs it
           ZERODHA_TOKEN_SHEET_KEY: ${{ secrets.ZERODHA_TOKEN_SHEET_KEY }}
           ZERODHA_TOKEN_WORKSHEET: "Sheet1"
 
