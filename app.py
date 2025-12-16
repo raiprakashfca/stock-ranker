@@ -189,10 +189,32 @@ df["DataQuality"] = df.apply(_data_quality, axis=1)
 # -----------------------------
 # Ranking logic: block stale rows if enabled
 # -----------------------------
-score_col = "TMV Score"
-if score_col not in df.columns:
-    st.error(f"LiveScores missing '{score_col}' column. Fix tmv_updater writer.")
+# Normalize headers (kills trailing spaces & weird casing issues)
+df.columns = [str(c).strip() for c in df.columns]
+
+# Accept common aliases
+score_candidates = [
+    "TMV Score",
+    "TMV score",
+    "TMV_Score",
+    "15m TMV Score",
+    "15m TMV score",
+]
+
+score_col = next((c for c in score_candidates if c in df.columns), None)
+
+# fallback: pick any column containing 'tmv' and 'score'
+if score_col is None:
+    for c in df.columns:
+        cl = c.lower()
+        if "tmv" in cl and "score" in cl:
+            score_col = c
+            break
+
+if score_col is None:
+    st.error(f"LiveScores missing TMV score column. Found columns: {list(df.columns)}")
     st.stop()
+
 
 # make TMV numeric
 df[score_col] = pd.to_numeric(df[score_col], errors="coerce")
