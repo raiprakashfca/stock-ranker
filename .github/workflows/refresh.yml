@@ -2,26 +2,45 @@ name: Auto Refresh Dashboard
 
 on:
   schedule:
-    # Run every 15 minutes during market hours (Mon-Fri, 9:15am–3:30pm IST)
-    - cron: '*/15 3-10 * * 1-5'  # UTC time => 9:15 to 15:30 IST
+    # Every 5 minutes during market hours (Mon-Fri).
+    # UTC 03:45–10:00 ~= IST 09:15–15:30
+    - cron: "*/5 3-10 * * 1-5"
   workflow_dispatch:
 
 jobs:
   refresh:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: "3.11"
 
       - name: Install dependencies
         run: |
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run stock data update
+      - name: Run TMV updater (writes LiveScores)
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          BACKGROUND_SHEET_KEY: ${{ secrets.BACKGROUND_SHEET_KEY }}
+
+          WATCHLIST_WORKSHEET: "Watchlist"
+          LIVESCORE_WORKSHEET: "LiveScores"
+
+          # Only needed if your fetch_ohlc/token logic reads from ZerodhaTokenStore
+          ZERODHA_TOKEN_SHEET_KEY: ${{ secrets.ZERODHA_TOKEN_SHEET_KEY }}
+          ZERODHA_TOKEN_WORKSHEET: "Sheet1"
+
         run: |
-          python .github/scripts/refresh_data.py
+          python tmv_updater.py
+
+      - name: Post-run sanity log (optional)
+        if: always()
+        run: |
+          echo "Updater run completed at (UTC): $(date -u)"
