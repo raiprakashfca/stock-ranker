@@ -12,20 +12,32 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # --------------------------------------------------
+      # Checkout repo
+      # --------------------------------------------------
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # --------------------------------------------------
+      # Python setup
+      # --------------------------------------------------
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
+      # --------------------------------------------------
+      # Install dependencies
+      # --------------------------------------------------
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # Decode BASE64 secret -> single-line JSON env var (same name)
+      # --------------------------------------------------
+      # Decode Google Service Account (BASE64 → JSON)
+      # Uses SAME secret name
+      # --------------------------------------------------
       - name: Decode Google service account JSON
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
@@ -33,22 +45,35 @@ jobs:
           echo "$GOOGLE_SERVICE_ACCOUNT_JSON" | base64 -d > /tmp/gcp_sa.json
           python -c "import json; print('GOOGLE_SERVICE_ACCOUNT_JSON=' + json.dumps(json.load(open('/tmp/gcp_sa.json'))))" >> $GITHUB_ENV
 
-      # Optional: sanity (remove after first success)
+      # --------------------------------------------------
+      # Optional sanity check (safe to remove later)
+      # --------------------------------------------------
       - name: Debug decoded JSON length
         run: |
           echo "Decoded JSON length: ${#GOOGLE_SERVICE_ACCOUNT_JSON}"
 
-      - name: Run TMV updater (writes LiveScores)
+      # --------------------------------------------------
+      # Run TMV updater
+      # --------------------------------------------------
+      - name: Run TMV updater (writes to Worksheet)
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ env.GOOGLE_SERVICE_ACCOUNT_JSON }}
+
           BACKGROUND_SHEET_KEY: ${{ secrets.BACKGROUND_SHEET_KEY }}
-          WATCHLIST_WORKSHEET: "Watchlist"
-          LIVESCORE_WORKSHEET: "LiveScores"
+
+          # BOTH watchlist + output are in same tab
+          WATCHLIST_WORKSHEET: "Worksheet"
+          LIVESCORE_WORKSHEET: "Worksheet"
+
           ZERODHA_TOKEN_SHEET_KEY: ${{ secrets.ZERODHA_TOKEN_SHEET_KEY }}
           ZERODHA_TOKEN_WORKSHEET: "Sheet1"
+
         run: |
           python tmv_updater.py
 
+      # --------------------------------------------------
+      # Post-run log
+      # --------------------------------------------------
       - name: Post-run sanity log
         if: always()
         run: |
