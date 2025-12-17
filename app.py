@@ -69,7 +69,7 @@ except Exception as e:
     st.sidebar.warning("Please login again to refresh today's token.")
 
     # ✅ FIXED: pass api_key so login and validation use SAME key
-    new_token = render_token_panel(api_key)
+    new_token = render_token_panel(api_key, api_secret)
     if not new_token:
         st.stop()
 
