@@ -5,20 +5,20 @@ from kiteconnect import KiteConnect
 from utils.token_utils import save_token_to_gsheet
 
 
-def render_token_panel(api_key: str) -> str | None:
+def render_token_panel(api_key: str, api_secret: str) -> str | None:
     """
-    Renders Zerodha login panel and returns a valid access_token.
-    IMPORTANT:
-    - Uses api_key passed from app.py (single source of truth)
-    - Saves token to ZerodhaTokenStore (C1)
-    - Returns token ONLY if validated via kite.profile()
+    Zerodha login panel.
+    - Uses api_key + api_secret from ZerodhaTokenStore
+    - Generates access_token
+    - Validates via kite.profile()
+    - Saves token to Google Sheet
     """
 
-    if not api_key:
-        st.error("Missing api_key. Cannot initiate Zerodha login.")
+    if not api_key or not api_secret:
+        st.sidebar.error("Missing api_key or api_secret in ZerodhaTokenStore.")
         return None
 
-    st.sidebar.info("🔑 Zerodha login required")
+    st.sidebar.info("🔐 Zerodha login required")
 
     kite = KiteConnect(api_key=api_key)
 
@@ -45,19 +45,18 @@ def render_token_panel(api_key: str) -> str | None:
     try:
         session = kite.generate_session(
             request_token=request_token,
-            api_secret=None,  # api_secret not needed if already stored server-side
+            api_secret=api_secret,   # ✅ REQUIRED
         )
-        access_token = session.get("access_token")
 
+        access_token = session.get("access_token")
         if not access_token:
-            raise RuntimeError("No access_token returned by Zerodha.")
+            raise RuntimeError("Zerodha did not return access_token.")
 
         kite.set_access_token(access_token)
 
-        # 🔒 HARD VALIDATION (this is critical)
+        # HARD validation
         kite.profile()
 
-        # Save token centrally
         save_token_to_gsheet(access_token)
 
         st.sidebar.success("✅ Zerodha login successful. Token saved.")
