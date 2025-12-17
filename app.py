@@ -15,7 +15,7 @@ from utils.token_utils import load_credentials_from_gsheet
 from utils.google_client import get_gspread_client
 
 # ─────────────────────────────────────────────────────────────
-# Environment bridge (so utils work everywhere)
+# Environment bridge
 # ─────────────────────────────────────────────────────────────
 for key in [
     "ZERODHA_TOKEN_SHEET_KEY",
@@ -37,23 +37,15 @@ IST = pytz.timezone("Asia/Kolkata")
 # ─────────────────────────────────────────────────────────────
 # Streamlit config
 # ─────────────────────────────────────────────────────────────
-st.set_page_config(
-    page_title="TMV Stock Ranker",
-    page_icon="📈",
-    layout="wide",
-)
+st.set_page_config(page_title="TMV Stock Ranker", page_icon="📈", layout="wide")
 
 # ─────────────────────────────────────────────────────────────
-# Zerodha session (CACHED, SAFE)
+# Zerodha session (cached)
 # ─────────────────────────────────────────────────────────────
 st.sidebar.header("🔐 Zerodha Session")
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_zerodha_creds_cached():
-    """
-    Read Zerodha credentials ONCE per hour.
-    Prevents Google Sheets quota blow-ups.
-    """
     return load_credentials_from_gsheet()
 
 kite = None
@@ -65,12 +57,12 @@ try:
     api_key, api_secret, access_token = load_zerodha_creds_cached()
 
     if not api_key or not access_token:
-        raise RuntimeError("Missing API key or access token in ZerodhaTokenStore.")
+        raise RuntimeError("Missing Zerodha credentials.")
 
     kite = KiteConnect(api_key=api_key)
     kite.set_access_token(access_token)
-
     profile = kite.profile()
+
     st.sidebar.success(
         f"✅ Logged in as: {profile.get('user_name','?')} ({profile.get('user_id','?')})"
     )
@@ -79,9 +71,8 @@ except Exception as e:
     st.sidebar.warning("⚠️ Stored token invalid or expired.")
     st.sidebar.caption(str(e))
 
-    # 🔑 IMPORTANT: this restores your OLD behavior
-    # You can paste FULL redirect URL or just request_token
-    new_token = render_token_panel(api_key)
+    # ✅ REVERTED: original working behavior
+    new_token = render_token_panel()
     if not new_token:
         st.stop()
 
@@ -98,11 +89,9 @@ except Exception as e:
         st.stop()
 
 # ─────────────────────────────────────────────────────────────
-# Auto-refresh (SAFE)
+# Auto-refresh
 # ─────────────────────────────────────────────────────────────
-refresh_sec = st.sidebar.slider(
-    "Auto-refresh (seconds)", 60, 600, 120, step=30
-)
+refresh_sec = st.sidebar.slider("Auto-refresh (seconds)", 60, 600, 120, step=30)
 st_autorefresh(interval=refresh_sec * 1000, key="refresh")
 
 # ─────────────────────────────────────────────────────────────
@@ -110,12 +99,10 @@ st_autorefresh(interval=refresh_sec * 1000, key="refresh")
 # ─────────────────────────────────────────────────────────────
 st.title("📈 TMV Stock Ranking Dashboard")
 now_ist = datetime.now(IST)
-st.caption(
-    f"🕒 Page refreshed at: {now_ist.strftime('%d %b %Y, %I:%M:%S %p IST')}"
-)
+st.caption(f"🕒 Page refreshed at: {now_ist.strftime('%d %b %Y, %I:%M:%S %p IST')}")
 
 # ─────────────────────────────────────────────────────────────
-# Google Sheet config
+# Sheets config
 # ─────────────────────────────────────────────────────────────
 BACKGROUND_SHEET_KEY = os.getenv(
     "BACKGROUND_SHEET_KEY",
@@ -131,7 +118,7 @@ MAX_AGE_MIN = st.sidebar.slider("Max allowed age (minutes)", 3, 120, 20, step=1)
 HARD_BLOCK_STALE = st.sidebar.checkbox("Block stale rows", value=True)
 
 # ─────────────────────────────────────────────────────────────
-# Cached LiveScores reader (CRITICAL)
+# Cached LiveScores reader
 # ─────────────────────────────────────────────────────────────
 @st.cache_data(ttl=120, show_spinner=False)
 def load_livescores():
@@ -139,10 +126,8 @@ def load_livescores():
     ws = gc.open_by_key(BACKGROUND_SHEET_KEY).worksheet(LIVESCORE_WS)
     values = ws.get_all_values()
     if not values or len(values) < 2:
-        raise RuntimeError("LiveScores is empty.")
-    headers = values[0]
-    rows = values[1:]
-    return pd.DataFrame(rows, columns=headers)
+        raise RuntimeError("LiveScores empty")
+    return pd.DataFrame(values[1:], columns=values[0])
 
 try:
     df = load_livescores()
@@ -150,118 +135,39 @@ except Exception as e:
     st.error(f"❌ Could not read LiveScores: {e}")
     st.stop()
 
-# ─────────────────────────────────────────────────────────────
-# Data cleanup
-# ─────────────────────────────────────────────────────────────
 df.columns = [str(c).strip() for c in df.columns]
 
 for c in df.columns:
-    if c in ("Symbol", "Trend Direction", "Regime", "SignalReason", "DataQuality"):
-        continue
-    df[c] = pd.to_numeric(df[c], errors="ignore")
+    if c not in ("Symbol", "Trend Direction", "Regime", "SignalReason", "DataQuality"):
+        df[c] = pd.to_numeric(df[c], errors="ignore")
 
-# ─────────────────────────────────────────────────────────────
-# Freshness computation
-# ─────────────────────────────────────────────────────────────
 def parse_ist(ts):
     try:
         dt = pd.to_datetime(ts, errors="coerce")
         if pd.isna(dt):
             return None
-        if dt.tzinfo is None:
-            return IST.localize(dt.to_pydatetime())
-        return dt.tz_convert(IST).to_pydatetime()
+        return IST.localize(dt.to_pydatetime()) if dt.tzinfo is None else dt.tz_convert(IST)
     except Exception:
         return None
 
-def age_minutes(dt):
-    if not dt:
-        return None
-    return round((now_ist - dt).total_seconds() / 60, 1)
+df["AsOf_dt"] = df["AsOf"].apply(parse_ist)
+df["AgeMin"] = df["AsOf_dt"].apply(
+    lambda d: round((now_ist - d).total_seconds() / 60, 1) if d else None
+)
 
-df["AsOf_dt"] = df["AsOf"].apply(parse_ist) if "AsOf" in df.columns else None
-df["AgeMin"] = df["AsOf_dt"].apply(age_minutes)
+df["DataQuality"] = df["AgeMin"].apply(
+    lambda a: "OK" if a is not None and a <= MAX_AGE_MIN else "STALE"
+)
 
-def data_quality(row):
-    age = row.get("AgeMin")
-    if age is None:
-        return "UNKNOWN"
-    return "OK" if age <= MAX_AGE_MIN else "STALE"
-
-df["DataQuality"] = df.apply(data_quality, axis=1)
-
-# ─────────────────────────────────────────────────────────────
-# TMV score detection
-# ─────────────────────────────────────────────────────────────
-score_col = None
-for c in df.columns:
-    cl = c.lower()
-    if "tmv" in cl and "score" in cl:
-        score_col = c
-        break
-
-if not score_col:
-    st.error(f"TMV score column not found. Columns: {list(df.columns)}")
-    st.stop()
-
-df[score_col] = pd.to_numeric(df[score_col], errors="coerce")
-
-rank_df = df.copy()
-if HARD_BLOCK_STALE:
-    rank_df = rank_df[rank_df["DataQuality"] == "OK"].copy()
-
+score_col = next(c for c in df.columns if "tmv" in c.lower() and "score" in c.lower())
+rank_df = df[df["DataQuality"] == "OK"] if HARD_BLOCK_STALE else df
 rank_df = rank_df.sort_values(by=score_col, ascending=False)
 
-# ─────────────────────────────────────────────────────────────
-# Display
-# ─────────────────────────────────────────────────────────────
-st.subheader(
-    "✅ Ranked (fresh data only)"
-    if HARD_BLOCK_STALE
-    else "📋 Ranked (includes stale rows)"
-)
-
-show_cols = [
-    "Symbol",
-    score_col,
-    "Confidence",
-    "Trend Direction",
-    "Regime",
-    "SignalReason",
-    "Reversal Probability",
-    "AsOf",
-    "AgeMin",
-    "DataQuality",
-]
-
-show_cols = [c for c in show_cols if c in rank_df.columns]
-
 st.dataframe(
-    rank_df[show_cols],
+    rank_df[
+        ["Symbol", score_col, "Confidence", "Trend Direction", "Regime",
+         "SignalReason", "Reversal Probability", "AgeMin", "DataQuality"]
+    ],
     use_container_width=True,
     hide_index=True,
-)
-
-# ─────────────────────────────────────────────────────────────
-# Stale rows (diagnostic)
-# ─────────────────────────────────────────────────────────────
-if HARD_BLOCK_STALE:
-    stale = df[df["DataQuality"] != "OK"]
-    if not stale.empty:
-        st.subheader("⚠️ Stale / ignored rows")
-        st.dataframe(
-            stale[show_cols],
-            use_container_width=True,
-            hide_index=True,
-        )
-
-# ─────────────────────────────────────────────────────────────
-# Download
-# ─────────────────────────────────────────────────────────────
-csv_bytes = rank_df.to_csv(index=False).encode("utf-8")
-st.download_button(
-    "⬇️ Download rankings as CSV",
-    data=csv_bytes,
-    file_name="tmv_rankings.csv",
-    mime="text/csv",
 )
