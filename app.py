@@ -14,16 +14,41 @@ from utils.token_utils import load_credentials_from_gsheet, save_token_to_gsheet
 from utils.google_client import get_gspread_client
 
 # ─────────────────────────────────────────────────────────────
+# CONFIG FALLBACKS (edit only if secrets are missing)
+# ─────────────────────────────────────────────────────────────
+DEFAULT_BACKGROUND_SHEET_KEY = "1Cpgj1M_ofN1SqvuqDDHuN7Gy17tfkhy4fCCP8Mx7bRI"
+
+# 🔥 PASTE your ZerodhaTokenStore Sheet KEY here ONLY if you don't want to add it in Streamlit secrets
+DEFAULT_ZERODHA_TOKEN_SHEET_KEY = ""  # <-- put your sheet key here if secrets missing
+
+DEFAULT_ZERODHA_TOKEN_WORKSHEET = "Sheet1"
+DEFAULT_LIVESCORE_WORKSHEET = "LiveScores"
+
+# ─────────────────────────────────────────────────────────────
 # Env bridge (so utils can read)
 # ─────────────────────────────────────────────────────────────
-for key in [
-    "ZERODHA_TOKEN_SHEET_KEY",
-    "ZERODHA_TOKEN_WORKSHEET",
-    "GOOGLE_SERVICE_ACCOUNT_JSON",
-    "BACKGROUND_SHEET_KEY",
-]:
-    if key in st.secrets:
-        os.environ[key] = st.secrets[key]
+def _secrets_get(key: str, default=""):
+    try:
+        return st.secrets.get(key, default)
+    except Exception:
+        return default
+
+# Make sure required env vars exist for utils/*
+if _secrets_get("GOOGLE_SERVICE_ACCOUNT_JSON", ""):
+    os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"] = _secrets_get("GOOGLE_SERVICE_ACCOUNT_JSON")
+
+# ZerodhaTokenStore routing
+zerodha_sheet_key = _secrets_get("ZERODHA_TOKEN_SHEET_KEY", "") or DEFAULT_ZERODHA_TOKEN_SHEET_KEY
+zerodha_ws_name = _secrets_get("ZERODHA_TOKEN_WORKSHEET", DEFAULT_ZERODHA_TOKEN_WORKSHEET)
+
+if zerodha_sheet_key:
+    os.environ["ZERODHA_TOKEN_SHEET_KEY"] = zerodha_sheet_key
+os.environ["ZERODHA_TOKEN_WORKSHEET"] = zerodha_ws_name
+
+# BackgroundAnalysisStore routing
+background_sheet_key = _secrets_get("BACKGROUND_SHEET_KEY", "") or DEFAULT_BACKGROUND_SHEET_KEY
+os.environ["BACKGROUND_SHEET_KEY"] = background_sheet_key
+os.environ["LIVESCORE_WORKSHEET"] = _secrets_get("LIVESCORE_WORKSHEET", DEFAULT_LIVESCORE_WORKSHEET)
 
 # ─────────────────────────────────────────────────────────────
 # Logging
@@ -32,27 +57,25 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger("tmv_dashboard")
 
 IST = pytz.timezone("Asia/Kolkata")
-
 st.set_page_config(page_title="TMV Stock Ranker", page_icon="📈", layout="wide")
 
 # ─────────────────────────────────────────────────────────────
-# Helpers
+# Hard-stop if service account JSON missing (otherwise gspread will fail)
+# ─────────────────────────────────────────────────────────────
+if not os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON"):
+    st.error("Missing GOOGLE_SERVICE_ACCOUNT_JSON in Streamlit secrets/env. Add it as a secret.")
+    st.stop()
+
+# ─────────────────────────────────────────────────────────────
+# Helper: extract request_token from URL or token
 # ─────────────────────────────────────────────────────────────
 def extract_request_token(text: str) -> str:
-    """
-    Accepts:
-      - full redirect URL after Kite login
-      - just the request_token
-    Returns request_token or "".
-    """
     if not text:
         return ""
     t = text.strip()
-    # If it's a URL, pull request_token=
     m = re.search(r"request_token=([A-Za-z0-9]+)", t)
     if m:
         return m.group(1)
-    # Otherwise assume user pasted token directly
     if re.fullmatch(r"[A-Za-z0-9]{6,}", t):
         return t
     return ""
@@ -69,19 +92,15 @@ def parse_ist(ts):
         return None
 
 # ─────────────────────────────────────────────────────────────
-# Zerodha session (cached creds; interactive fallback)
+# Zerodha session
 # ─────────────────────────────────────────────────────────────
 st.sidebar.header("🔐 Zerodha Session")
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_zerodha_creds_cached():
-    # Reads A1 api_key, B1 api_secret, C1 access_token from ZerodhaTokenStore
     return load_credentials_from_gsheet()
 
 def kite_login_flow(api_key: str, api_secret: str) -> str:
-    """
-    Returns a valid access_token (string) or "" if not obtained.
-    """
     if not api_key or not api_secret:
         st.sidebar.error("ZerodhaTokenStore missing API key/secret (A1/B1).")
         return ""
@@ -91,54 +110,55 @@ def kite_login_flow(api_key: str, api_secret: str) -> str:
 
     st.sidebar.markdown("### Login required")
     st.sidebar.markdown(f"[👉 Click to login Zerodha]({login_url})")
-    st.sidebar.caption("After login, paste the **full redirect URL** here (or just the request_token).")
+    st.sidebar.caption("After login, paste the full redirect URL here (or just request_token).")
 
-    pasted = st.sidebar.text_input("Paste redirect URL or request_token", value="", type="default")
+    pasted = st.sidebar.text_input("Paste redirect URL or request_token", value="")
     request_token = extract_request_token(pasted)
 
     col1, col2 = st.sidebar.columns(2)
-    with col1:
-        go = st.button("Generate access token", use_container_width=True)
-    with col2:
-        clear = st.button("Clear", use_container_width=True)
+    go = col1.button("Generate access token", use_container_width=True)
+    clr = col2.button("Clear", use_container_width=True)
 
-    if clear:
+    if clr:
         st.rerun()
 
     if not go:
         return ""
 
     if not request_token:
-        st.sidebar.error("Could not find request_token in the pasted text.")
+        st.sidebar.error("Could not find request_token in pasted text.")
         return ""
 
     try:
-        session = kite_tmp.generate_session(request_token, api_secret=api_secret)
-        new_token = session.get("access_token", "")
+        sess = kite_tmp.generate_session(request_token, api_secret=api_secret)
+        new_token = sess.get("access_token", "")
         if not new_token:
-            st.sidebar.error("generate_session worked but access_token missing.")
+            st.sidebar.error("No access_token returned by Kite.")
             return ""
-        # Save to ZerodhaTokenStore C1
         save_token_to_gsheet(new_token)
-        st.sidebar.success("✅ Access token generated & saved to ZerodhaTokenStore (C1).")
+        st.sidebar.success("✅ Token generated & saved to ZerodhaTokenStore (C1).")
         return new_token
     except Exception as e:
         st.sidebar.error(f"❌ Zerodha login failed: {e}")
         return ""
 
-# Initialize Kite
+# Make config issues obvious
+if not zerodha_sheet_key:
+    st.sidebar.warning("ZERODHA_TOKEN_SHEET_KEY is missing.")
+    st.sidebar.info("Fix: add ZERODHA_TOKEN_SHEET_KEY in Streamlit secrets, OR paste it in DEFAULT_ZERODHA_TOKEN_SHEET_KEY in app.py.")
+    st.stop()
+
 kite = None
 api_key = api_secret = access_token = ""
 
 try:
     api_key, api_secret, access_token = load_zerodha_creds_cached()
-
     if not api_key:
-        raise RuntimeError("Missing api_key in ZerodhaTokenStore (A1).")
+        raise RuntimeError("Missing api_key in ZerodhaTokenStore A1.")
     if not api_secret:
-        raise RuntimeError("Missing api_secret in ZerodhaTokenStore (B1).")
+        raise RuntimeError("Missing api_secret in ZerodhaTokenStore B1.")
     if not access_token:
-        raise RuntimeError("Missing access_token in ZerodhaTokenStore (C1).")
+        raise RuntimeError("Missing access_token in ZerodhaTokenStore C1.")
 
     kite = KiteConnect(api_key=api_key)
     kite.set_access_token(access_token)
@@ -149,23 +169,12 @@ except Exception as e:
     st.sidebar.warning("⚠️ Stored token invalid/expired OR missing. Login again.")
     st.sidebar.caption(str(e))
 
-    # Interactive login
     new_token = kite_login_flow(api_key, api_secret)
     if not new_token:
         st.stop()
 
-    # Validate after saving
-    kite = KiteConnect(api_key=api_key)
-    kite.set_access_token(new_token)
-    try:
-        profile = kite.profile()
-        st.sidebar.success(f"✅ Logged in: {profile.get('user_name','?')} ({profile.get('user_id','?')})")
-        # refresh cached creds so next rerun reads token smoothly
-        st.cache_data.clear()
-        st.rerun()
-    except Exception as e2:
-        st.sidebar.error(f"❌ Token still invalid: {e2}")
-        st.stop()
+    st.cache_data.clear()
+    st.rerun()
 
 # ─────────────────────────────────────────────────────────────
 # Auto-refresh
@@ -181,25 +190,16 @@ now_ist = datetime.now(IST)
 st.caption(f"🕒 Page refreshed at: {now_ist.strftime('%d %b %Y, %I:%M:%S %p IST')}")
 
 # ─────────────────────────────────────────────────────────────
-# Sheet config
+# Load LiveScores
 # ─────────────────────────────────────────────────────────────
-BACKGROUND_SHEET_KEY = os.getenv(
-    "BACKGROUND_SHEET_KEY",
-    "1Cpgj1M_ofN1SqvuqDDHuN7Gy17tfkhy4fCCP8Mx7bRI",
-)
-LIVESCORE_WS = os.getenv("LIVESCORE_WORKSHEET", "LiveScores")
+BACKGROUND_SHEET_KEY = background_sheet_key
+LIVESCORE_WS = os.getenv("LIVESCORE_WORKSHEET", DEFAULT_LIVESCORE_WORKSHEET)
 
-# ─────────────────────────────────────────────────────────────
-# Freshness controls
-# ─────────────────────────────────────────────────────────────
 st.sidebar.subheader("🧪 Data Freshness Rules")
 MAX_AGE_MIN = st.sidebar.slider("Max allowed age (minutes)", 3, 120, 20, step=1)
 BLOCK_STALE = st.sidebar.checkbox("Block STALE rows", value=True)
 INCLUDE_UNKNOWN = st.sidebar.checkbox("Include UNKNOWN rows", value=True)
 
-# ─────────────────────────────────────────────────────────────
-# Read LiveScores (cached)
-# ─────────────────────────────────────────────────────────────
 @st.cache_data(ttl=120, show_spinner=False)
 def load_livescores():
     gc = get_gspread_client()
@@ -217,15 +217,12 @@ except Exception as e:
 
 df.columns = [str(c).strip() for c in df.columns]
 
-# Numeric conversion (safe)
 for c in df.columns:
     if c in ("Symbol", "Trend Direction", "Regime", "SignalReason", "DataQuality"):
         continue
     df[c] = pd.to_numeric(df[c], errors="ignore")
 
-# ─────────────────────────────────────────────────────────────
-# Freshness handling (defensive)
-# ─────────────────────────────────────────────────────────────
+# Freshness (defensive)
 if "AsOf" in df.columns:
     freshness_src = "AsOf"
 elif "CandleTime" in df.columns:
@@ -245,30 +242,7 @@ def quality(age):
 
 df["DataQuality"] = df["AgeMin"].apply(quality)
 
-# ─────────────────────────────────────────────────────────────
-# Diagnostics (prevents “blank table” confusion)
-# ─────────────────────────────────────────────────────────────
-total = len(df)
-counts = df["DataQuality"].value_counts(dropna=False).to_dict()
-ok_n = int(counts.get("OK", 0))
-stale_n = int(counts.get("STALE", 0))
-unk_n = int(counts.get("UNKNOWN", 0))
-
-with st.expander("🔎 Diagnostics", expanded=False):
-    st.write(
-        {
-            "rows_total": total,
-            "freshness_source": freshness_src,
-            "OK": ok_n,
-            "STALE": stale_n,
-            "UNKNOWN": unk_n,
-            "columns": list(df.columns),
-        }
-    )
-
-# ─────────────────────────────────────────────────────────────
 # Score column detection
-# ─────────────────────────────────────────────────────────────
 score_col = next((c for c in df.columns if "tmv" in c.lower() and "score" in c.lower()), None)
 if not score_col:
     st.error(f"TMV score column not found. Columns: {list(df.columns)}")
@@ -276,11 +250,8 @@ if not score_col:
 
 df[score_col] = pd.to_numeric(df[score_col], errors="coerce")
 
-# ─────────────────────────────────────────────────────────────
-# Filtering (empty-table proof)
-# ─────────────────────────────────────────────────────────────
+# Filter (empty-table proof)
 rank_df = df.copy()
-
 if BLOCK_STALE:
     allowed = {"OK"}
     if INCLUDE_UNKNOWN:
@@ -293,9 +264,7 @@ if rank_df.empty:
 
 rank_df = rank_df.sort_values(by=score_col, ascending=False)
 
-# ─────────────────────────────────────────────────────────────
-# Display (safe columns)
-# ─────────────────────────────────────────────────────────────
+# Display
 preferred_cols = [
     "Symbol",
     score_col,
@@ -315,8 +284,8 @@ show_cols = [c for c in preferred_cols if c in rank_df.columns]
 if not show_cols:
     show_cols = rank_df.columns.tolist()
 
-st.subheader("📋 Rankings")
 st.dataframe(rank_df[show_cols], use_container_width=True, hide_index=True)
 
+# Download
 csv_bytes = rank_df.to_csv(index=False).encode("utf-8")
 st.download_button("⬇️ Download rankings as CSV", data=csv_bytes, file_name="tmv_rankings.csv", mime="text/csv")
