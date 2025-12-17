@@ -150,7 +150,40 @@ def parse_ist(ts):
     except Exception:
         return None
 
-df["AsOf_dt"] = df["AsOf"].apply(parse_ist)
+# -----------------------------
+# Freshness handling (defensive)
+# -----------------------------
+def parse_ist(ts):
+    try:
+        dt = pd.to_datetime(ts, errors="coerce")
+        if pd.isna(dt):
+            return None
+        if dt.tzinfo is None:
+            return IST.localize(dt.to_pydatetime())
+        return dt.tz_convert(IST).to_pydatetime()
+    except Exception:
+        return None
+
+if "AsOf" in df.columns:
+    freshness_src = "AsOf"
+elif "CandleTime" in df.columns:
+    freshness_src = "CandleTime"
+else:
+    freshness_src = None
+
+if freshness_src:
+    df["AsOf_dt"] = df[freshness_src].apply(parse_ist)
+else:
+    df["AsOf_dt"] = None
+
+df["AgeMin"] = df["AsOf_dt"].apply(
+    lambda d: round((now_ist - d).total_seconds() / 60, 1) if d else None
+)
+
+df["DataQuality"] = df["AgeMin"].apply(
+    lambda a: "OK" if a is not None and a <= MAX_AGE_MIN else "STALE"
+)
+
 df["AgeMin"] = df["AsOf_dt"].apply(
     lambda d: round((now_ist - d).total_seconds() / 60, 1) if d else None
 )
