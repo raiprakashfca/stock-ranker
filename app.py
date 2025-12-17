@@ -1,5 +1,4 @@
 import os
-import json
 import logging
 from datetime import datetime
 
@@ -14,76 +13,64 @@ from utils.token_panel import render_token_panel
 from utils.token_utils import load_credentials_from_gsheet
 from utils.google_client import get_gspread_client
 
-# -------------------------------------------------
-# Env bridge (so utils can read Streamlit secrets)
-# -------------------------------------------------
+# -----------------------------
+# Env bridge (so utils can read)
+# -----------------------------
 if "ZERODHA_TOKEN_SHEET_KEY" in st.secrets:
     os.environ["ZERODHA_TOKEN_SHEET_KEY"] = st.secrets["ZERODHA_TOKEN_SHEET_KEY"]
-
 if "ZERODHA_TOKEN_WORKSHEET" in st.secrets:
     os.environ["ZERODHA_TOKEN_WORKSHEET"] = st.secrets["ZERODHA_TOKEN_WORKSHEET"]
-
 if "GOOGLE_SERVICE_ACCOUNT_JSON" in st.secrets:
     os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"] = st.secrets["GOOGLE_SERVICE_ACCOUNT_JSON"]
-
 if "BACKGROUND_SHEET_KEY" in st.secrets:
     os.environ["BACKGROUND_SHEET_KEY"] = st.secrets["BACKGROUND_SHEET_KEY"]
 
-# -------------------------------------------------
+# -----------------------------
 # Logging
-# -------------------------------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s"
-)
+# -----------------------------
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("tmv_dashboard")
 
 IST = pytz.timezone("Asia/Kolkata")
 
-# -------------------------------------------------
+# -----------------------------
 # Streamlit config
-# -------------------------------------------------
-st.set_page_config(
-    page_title="TMV Stock Ranker",
-    page_icon="📈",
-    layout="wide"
-)
+# -----------------------------
+st.set_page_config(page_title="TMV Stock Ranker", page_icon="📈", layout="wide")
 
-# -------------------------------------------------
+# -----------------------------
 # Sidebar: Zerodha session
-# -------------------------------------------------
+# -----------------------------
 st.sidebar.header("🔐 Zerodha Session")
 
 kite = None
-api_key = None
-access_token = None
+api_key = ""
+api_secret = ""
+access_token = ""
 
 try:
-    # 🔑 SINGLE SOURCE OF TRUTH
     api_key, api_secret, access_token = load_credentials_from_gsheet()
 
-    if not api_key or not access_token:
-        raise RuntimeError("Missing API key or access token in ZerodhaTokenStore.")
+    if not api_key:
+        raise RuntimeError("Missing api_key in ZerodhaTokenStore (A1).")
+
+    if not access_token:
+        raise RuntimeError("Missing access_token in ZerodhaTokenStore (C1).")
 
     kite = KiteConnect(api_key=api_key)
     kite.set_access_token(access_token)
 
     profile = kite.profile()
-    st.sidebar.success(
-        f"✅ Logged in as: {profile.get('user_name','?')} "
-        f"({profile.get('user_id','?')})"
-    )
+    st.sidebar.success(f"✅ Logged in as: {profile.get('user_name','?')} ({profile.get('user_id','?')})")
 
 except Exception as e:
-    st.sidebar.warning("⚠️ Stored token invalid or expired. Please login again.")
+    # TEMP: show the real reason so debugging is not blind
+    st.sidebar.error(f"⚠️ Stored token check failed: {e}")
+    st.sidebar.warning("Please login again to refresh today's token.")
 
-    # Show login panel ONLY when needed
-    new_token = render_token_panel()
+    # ✅ FIXED: pass api_key so login and validation use SAME key
+    new_token = render_token_panel(api_key)
     if not new_token:
-        st.stop()
-
-    if not api_key:
-        st.error("Missing api_key in ZerodhaTokenStore (cell A1).")
         st.stop()
 
     kite = KiteConnect(api_key=api_key)
@@ -91,64 +78,48 @@ except Exception as e:
 
     try:
         profile = kite.profile()
-        st.sidebar.success(
-            f"✅ Logged in as: {profile.get('user_name','?')} "
-            f"({profile.get('user_id','?')})"
-        )
-    except Exception:
-        st.error("❌ Token still invalid. Please regenerate.")
+        st.sidebar.success(f"✅ Logged in as: {profile.get('user_name','?')} ({profile.get('user_id','?')})")
+    except Exception as e2:
+        st.sidebar.error(f"❌ Token still invalid after login: {e2}")
         st.stop()
 
-# -------------------------------------------------
+# -----------------------------
 # Auto-refresh
-# -------------------------------------------------
-refresh_sec = st.sidebar.slider(
-    "Auto-refresh (seconds)", 30, 300, 60, step=30
-)
+# -----------------------------
+refresh_sec = st.sidebar.slider("Auto-refresh (seconds)", 30, 300, 60, step=30)
 st_autorefresh(interval=refresh_sec * 1000, key="refresh")
 
-# -------------------------------------------------
+# -----------------------------
 # Header
-# -------------------------------------------------
+# -----------------------------
 st.title("📈 TMV Stock Ranking Dashboard (Freshness-Strict)")
-
 now_ist = datetime.now(IST)
-st.caption(
-    f"🕒 Page refreshed at: "
-    f"{now_ist.strftime('%d %b %Y, %I:%M:%S %p IST')}"
-)
+st.caption(f"🕒 Page refreshed at: {now_ist.strftime('%d %b %Y, %I:%M:%S %p IST')}")
 
-# -------------------------------------------------
-# Sheet config
-# -------------------------------------------------
+# -----------------------------
+# Sheet config (BackgroundAnalysisStore)
+# -----------------------------
 BACKGROUND_SHEET_KEY = os.getenv(
     "BACKGROUND_SHEET_KEY",
     "1Cpgj1M_ofN1SqvuqDDHuN7Gy17tfkhy4fCCP8Mx7bRI",
 )
-
 LIVESCORE_WS = os.getenv("LIVESCORE_WORKSHEET", "LiveScores")
 
-# -------------------------------------------------
-# Freshness controls
-# -------------------------------------------------
+# Freshness thresholds
 st.sidebar.subheader("🧪 Data Freshness Rules")
+MAX_AGE_MIN = st.sidebar.slider("Max allowed Age (minutes)", 3, 120, 20, step=1)
+HARD_BLOCK_STALE = st.sidebar.checkbox("Block stale rows from ranking", value=True)
 
-MAX_AGE_MIN = st.sidebar.slider(
-    "Max allowed Age (minutes)", 3, 120, 20, step=1
-)
-
-HARD_BLOCK_STALE = st.sidebar.checkbox(
-    "Block stale rows from ranking", value=True
-)
 
 def _parse_ist(ts):
+    """Parse timestamp to IST aware datetime; return None if invalid."""
     if ts is None or (isinstance(ts, float) and np.isnan(ts)):
         return None
     try:
         dt = pd.to_datetime(ts, errors="coerce")
         if pd.isna(dt):
             return None
-        if dt.tzinfo is None:
+        if getattr(dt, "tzinfo", None) is None:
             dt = IST.localize(dt.to_pydatetime())
         else:
             dt = dt.tz_convert(IST).to_pydatetime()
@@ -156,21 +127,22 @@ def _parse_ist(ts):
     except Exception:
         return None
 
+
 def _age_minutes(dt_ist):
     if not dt_ist:
         return None
     return round((now_ist - dt_ist).total_seconds() / 60.0, 1)
 
-# -------------------------------------------------
-# Read LiveScores
-# -------------------------------------------------
+
+# -----------------------------
+# Read LiveScores via gspread
+# -----------------------------
 try:
     gc = get_gspread_client()
     ws = gc.open_by_key(BACKGROUND_SHEET_KEY).worksheet(LIVESCORE_WS)
     values = ws.get_all_values()
-
     if not values or len(values) < 2:
-        raise RuntimeError(f"{LIVESCORE_WS} is empty.")
+        raise RuntimeError(f"{LIVESCORE_WS} seems empty.")
 
     headers = values[0]
     rows = values[1:]
@@ -180,90 +152,86 @@ except Exception as e:
     st.error(f"❌ Could not read {LIVESCORE_WS} via gspread: {e}")
     st.stop()
 
-# -------------------------------------------------
+# -----------------------------
 # Type cleanup
-# -------------------------------------------------
+# -----------------------------
+df.columns = [str(c).strip() for c in df.columns]
+
 for c in df.columns:
     if c in ("Symbol", "Trend Direction", "Regime", "DataQuality"):
         continue
     df[c] = pd.to_numeric(df[c], errors="ignore")
 
-# -------------------------------------------------
-# Freshness logic
-# -------------------------------------------------
+# -----------------------------
+# Freshness rules
+# -----------------------------
 if "AsOf" in df.columns:
     df["AsOf_dt"] = df["AsOf"].apply(_parse_ist)
     df["AgeMin"] = df["AsOf_dt"].apply(_age_minutes)
 else:
+    df["AsOf_dt"] = None
     df["AgeMin"] = None
 
-df["DataQuality"] = df["AgeMin"].apply(
-    lambda x: "OK" if x is not None and x <= MAX_AGE_MIN else "STALE"
-)
 
-# -------------------------------------------------
-# Ranking logic
-# -------------------------------------------------
-df.columns = [str(c).strip() for c in df.columns]
+def _data_quality(row):
+    age = row.get("AgeMin", None)
+    if age is None:
+        return "UNKNOWN"
+    if age <= MAX_AGE_MIN:
+        return "OK"
+    return "STALE"
 
-score_candidates = [
-    "TMV Score",
-    "TMV score",
-    "TMV_Score",
-    "15m TMV Score",
-]
+
+df["DataQuality"] = df.apply(_data_quality, axis=1)
+
+# -----------------------------
+# Ranking
+# -----------------------------
+score_candidates = ["TMV Score", "TMV score", "TMV_Score", "15m TMV Score", "15m TMV score"]
 
 score_col = next((c for c in score_candidates if c in df.columns), None)
-
 if score_col is None:
     for c in df.columns:
-        if "tmv" in c.lower() and "score" in c.lower():
+        cl = c.lower()
+        if "tmv" in cl and "score" in cl:
             score_col = c
             break
 
 if score_col is None:
-    st.error(f"TMV Score column not found. Columns: {list(df.columns)}")
+    st.error(f"LiveScores missing TMV score column. Found columns: {list(df.columns)}")
     st.stop()
 
 df[score_col] = pd.to_numeric(df[score_col], errors="coerce")
 
 rank_df = df.copy()
 if HARD_BLOCK_STALE:
-    rank_df = rank_df[rank_df["DataQuality"] == "OK"]
+    rank_df = rank_df[rank_df["DataQuality"] == "OK"].copy()
 
 rank_df = rank_df.sort_values(by=score_col, ascending=False)
 
-# -------------------------------------------------
+# -----------------------------
 # Display
-# -------------------------------------------------
-st.subheader(
-    "✅ Ranked (fresh rows only)"
-    if HARD_BLOCK_STALE
-    else "📋 Ranked (includes stale rows)"
-)
+# -----------------------------
+st.subheader("✅ Ranked (fresh rows only)" if HARD_BLOCK_STALE else "📋 Ranked (includes stale rows)")
 
-display_cols = [
-    c for c in [
-        "Symbol", "TMV Score", "Confidence",
-        "Trend Direction", "Regime",
-        "Reversal Probability",
-        "AsOf", "AgeMin", "DataQuality"
-    ] if c in rank_df.columns
-]
+show_cols = []
+for col in [
+    "Symbol", "TMV Score", "Confidence", "Trend Direction", "Regime",
+    "Reversal Probability", "AsOf", "CandleTime", "AgeMin", "DataQuality"
+]:
+    if col in rank_df.columns:
+        show_cols.append(col)
 
-st.dataframe(
-    rank_df[display_cols],
-    use_container_width=True,
-    hide_index=True
-)
+if not show_cols:
+    show_cols = rank_df.columns.tolist()
 
-# -------------------------------------------------
-# Download
-# -------------------------------------------------
+st.dataframe(rank_df[show_cols], use_container_width=True, hide_index=True)
+
+if HARD_BLOCK_STALE:
+    stale = df[df["DataQuality"] != "OK"].copy()
+    if not stale.empty:
+        st.subheader("⚠️ Stale / Unknown rows (NOT used for ranking)")
+        st.dataframe(stale[show_cols], use_container_width=True, hide_index=True)
+
 csv_bytes = rank_df.to_csv(index=False).encode("utf-8")
-st.download_button(
-    "⬇️ Download table as CSV",
-    data=csv_bytes,
-    file_name="tmv_rankings.csv",
-    mime="text/csv"
-)
+st.download_button("⬇️ Download table as CSV", data=csv_bytes, file_name="tmv_rankings.csv", mime="text/csv")
