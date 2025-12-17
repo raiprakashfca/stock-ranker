@@ -196,11 +196,33 @@ score_col = next(c for c in df.columns if "tmv" in c.lower() and "score" in c.lo
 rank_df = df[df["DataQuality"] == "OK"] if HARD_BLOCK_STALE else df
 rank_df = rank_df.sort_values(by=score_col, ascending=False)
 
+# -----------------------------
+# Safe display (no KeyErrors)
+# -----------------------------
+preferred_cols = [
+    "Symbol",
+    score_col,
+    "TMV Δ",
+    "Base TMV",
+    "Confidence",
+    "Trend Direction",
+    "Regime",
+    "SignalReason",
+    "Reversal Probability",
+    "AgeMin",
+    "DataQuality",
+]
+
+show_cols = [c for c in preferred_cols if c in rank_df.columns]
+
+if not show_cols:
+    st.error("No displayable columns found in LiveScores.")
+    st.write("Available columns:", list(rank_df.columns))
+    st.stop()
+
 st.dataframe(
-    rank_df[
-        ["Symbol", score_col, "Confidence", "Trend Direction", "Regime",
-         "SignalReason", "Reversal Probability", "AgeMin", "DataQuality"]
-    ],
+    rank_df[show_cols],
     use_container_width=True,
     hide_index=True,
 )
+
